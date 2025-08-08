@@ -1,0 +1,44 @@
+# Node dependencies
+node_modules/
+
+# Environment files
+.env
+development.env
+.env.*
+
+# Editor/IDE files
+.vscode/
+.idea/
+.DS_Store
+
+# Telegraf session or cache (if any)
+session.json
+
+# Build outputs
+dist/
+build/
+
+# Log files
+*.log
+
+# Tool/Editor state
+.cursor/
+
+# Database dumps or local data
+dump.rdb
+
+# OS generated files
+Thumbs.db
+
+# Python virtual environment (not needed for this project)
+venv/
+.venv/
+
+# Misc
+.env.local
+.env.production
+.env.development
+
+# Ignore yarn and npm lock files if not needed (optional)
+# yarn.lock
+# package-lock.json 
