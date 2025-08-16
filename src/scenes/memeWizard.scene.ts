@@ -11,29 +11,18 @@ import { MongoDBService } from '../services/mongodb.service';
 export function createMemeWizardScene(openaiService: OpenAIService, mongodbService: MongoDBService): Scenes.WizardScene<BotContext> {
   const scene = new Scenes.WizardScene<BotContext>(
     'memeWizard',
-    // Step 1: Image or skip
+    // Step 1: Show upload message and wait for image or skip
     async (ctx) => {
       // Don't process if we're in a recursive middleware call
       if (ctx.__processingFlag) return;
       
-      // Check if this is called from an action button to avoid duplicate messages
-      // We'll use a session flag to track if we've already shown the upload message
-      if (!(ctx.session as any).__uploadMessageShown) {
+      // Check if this is the initial entry (not from a user input)
+      if (!ctx.message) {
         await ctx.reply(ctx.i18n.t('memes.upload_image'));
-        // Set a flag so we don't show it again
-        (ctx.session as any).__uploadMessageShown = true;
+        return; // Don't advance automatically, wait for user input
       }
       
-      console.log('[DEBUG] About to advance from Step 1, current step:', ctx.wizard.cursor);
-      await ctx.wizard.next();
-      console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
-      return;
-    },
-    // Step 2: Wait for image or skip
-    async (ctx) => {
-      // Don't process if we're in a recursive middleware call
-      if (ctx.__processingFlag) return;
-      
+      // Handle user input in step 1
       if (ctx.message && 'photo' in ctx.message) {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         (ctx.session as any).memeImageFileId = photo.file_id;
@@ -66,17 +55,17 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
         (ctx.session as any).memeImageBuffer = undefined;
         (ctx.session as any).memeImageUsage = 'none';
         await ctx.reply(ctx.i18n.t('memes.no_image') + ' ' + ctx.i18n.t('memes.core_topic'));
-        console.log('[DEBUG] About to advance from Step 2 (skip), current step:', ctx.wizard.cursor);
+        console.log('[DEBUG] About to advance from Step 1 (skip), current step:', ctx.wizard.cursor);
         await ctx.wizard.next();
         console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
         return;
-      } else if (ctx.message) {
+      } else {
         // Only send the prompt once per session to avoid duplication
         await ctx.reply(ctx.i18n.t('memes.upload_image'));
         return;
       }
     },
-    // Step 3: Topic
+    // Step 2: Topic
     async (ctx) => {
       // Don't process if we're in a recursive middleware call
       if (ctx.__processingFlag) return;
@@ -360,9 +349,7 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
       }
     }
     
-    // If no previous parameters or error, start the regular flow
-    (ctx.session as any).__uploadMessageShown = true; // Mark as shown since we're about to show it
-    await ctx.reply(ctx.i18n.t('memes.upload_image'));
+    // If no previous parameters or error, the wizard step 1 will handle showing the upload message
   });
   
   // Register action handlers

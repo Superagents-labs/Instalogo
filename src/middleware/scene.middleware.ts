@@ -94,19 +94,57 @@ export function ensureSessionCleanup() {
     // Check if this is a command or callback that should reset session
     const isStartCommand = ctx.message && 'text' in ctx.message && ctx.message.text.startsWith('/start');
     const isMenuCommand = ctx.message && 'text' in ctx.message && ctx.message.text.startsWith('/menu');
-    const isCallbackForNewFlow = ctx.callbackQuery && ['generate_logo', 'generate_memes', 'generate_stickers', 'main_menu'].includes(ctx.callbackQuery.data);
+    const isCancelCommand = ctx.message && 'text' in ctx.message && ctx.message.text.startsWith('/cancel');
+    // FIXED: Don't clear session for generate_* callbacks - they handle their own session management
+    const isCallbackForNewFlow = ctx.callbackQuery && ['main_menu'].includes(ctx.callbackQuery.data);
     
-    if (isStartCommand || isMenuCommand || isCallbackForNewFlow) {
+    // DEBUG: Log what's triggering session cleanup
+    if (isStartCommand || isMenuCommand || isCancelCommand || isCallbackForNewFlow) {
+      console.log(`🔍 DEBUG: Session cleanup triggered by:`, {
+        isStartCommand,
+        isMenuCommand, 
+        isCancelCommand,
+        isCallbackForNewFlow,
+        callbackData: ctx.callbackQuery?.data,
+        messageText: ctx.message && 'text' in ctx.message ? ctx.message.text : null
+      });
       // Save important session values
       const scenes = ctx.session?.__scenes;
       const language = ctx.i18n?.locale();
       
-      // Reset the session entirely
-      ctx.session = { __scenes: scenes || { current: null, state: {} } } as any;
+      // Clear edit image session flags that persist outside of scenes
+      const editImageKeys = [
+        'awaitingEditPrompt',
+        'stickerEditPrompt', 
+        'awaitingStickerEdit',
+        'awaitingStarterPackImage'
+      ];
+      
+      if (ctx.session) {
+        editImageKeys.forEach(key => {
+          if ((ctx.session as any)[key]) {
+            console.log(`Clearing edit image session flag: ${key}`);
+            delete (ctx.session as any)[key];
+          }
+        });
+      }
+      
+      // Reset the session entirely including wizard state
+      ctx.session = { __scenes: { current: null, state: {} } } as any;
       
       // Restore language
       if (language && ctx.i18n) {
         ctx.i18n.locale(language);
+      }
+      
+      // Reset wizard cursor if present
+      if (ctx.wizard) {
+        try {
+          (ctx as any).wizard.cursor = 0;
+          console.log('Middleware reset wizard cursor to 0');
+        } catch (err) {
+          console.log('Middleware could not reset wizard cursor:', err);
+        }
       }
       
       console.log('Session cleared by middleware');
