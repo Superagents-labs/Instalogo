@@ -100,10 +100,8 @@ const wrappedStage = {
   }
 };
 
-// Apply stage middleware first, then the scene session reset middleware
+// Apply stage middleware only - no scene session reset middleware
 bot.use(wrappedStage.middleware());
-// Register scene reset middleware after stage is registered so ctx.scene exists
-bot.use(sceneSessionResetMiddleware());
 
 // Setup callback handlers
 setupCallbackHandlers(bot, openaiService, storageService, mongodbService);
@@ -132,6 +130,21 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
         delete (ctx.session as any)[key];
       }
     }
+    
+    // Clear edit image session flags that persist outside of scenes
+    const editImageKeys = [
+      'awaitingEditPrompt',
+      'stickerEditPrompt', 
+      'awaitingStickerEdit',
+      'awaitingStarterPackImage'
+    ];
+    
+    editImageKeys.forEach(key => {
+      if ((ctx.session as any)[key]) {
+        console.log(`Force clearing edit image session flag: ${key}`);
+        delete (ctx.session as any)[key];
+      }
+    });
   }
 
   if (ctx.scene && ctx.scene.current) {
@@ -146,7 +159,7 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
       // If we can't leave gracefully, we'll still reset the session below
     }
     
-    // Completely reset session
+    // Completely reset session including wizard state
     ctx.session = { 
       __scenes: { current: null, state: {} }
     } as any;
@@ -162,14 +175,24 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
     ctx.session = { __scenes: { current: null, state: {} } } as any;
   } else {
     // Even if not in a scene, clear everything except core structure
+    // This is crucial for wizard scenes that might persist state
+    const language = ctx.i18n?.locale();
     ctx.session = { __scenes: { current: null, state: {} } } as any;
     
     // Restore language if it was set
-    if (ctx.i18n) {
-      const lang = ctx.i18n.locale();
-      if (lang) {
-        ctx.i18n.locale(lang);
-      }
+    if (language && ctx.i18n) {
+      ctx.i18n.locale(language);
+    }
+  }
+  
+  // Extra safety: If there's still a wizard context, reset it
+  if (ctx.wizard) {
+    try {
+      // Reset wizard cursor to beginning
+      (ctx as any).wizard.cursor = 0;
+      console.log('Reset wizard cursor to 0');
+    } catch (err) {
+      console.log('Could not reset wizard cursor:', err);
     }
   }
 }
@@ -320,43 +343,7 @@ bot.hears('Generate Memes', async (ctx) => {
   await ctx.scene.enter('memeWizard');
 });
 
-// New: Inline button callback handler for 'Generate Memes'
-bot.action('generate_memes', async (ctx) => {
-  await ctx.answerCbQuery();
-  await forceLeaveCurrentScene(ctx);
-  
-  // Completely reset ALL meme-related session data
-  const memeKeys = [
-    'memeImageFileId', 'memeImageSkipped', 'memeTopic', 
-    'memeAudience', 'memeMood', 'memeElements', 
-    'memeCatch', 'memeFormat', 'memeColor', 'memeStyle', 
-    'memeStyleDesc', 'memeText', 'awaitingCustomMemeStyle'
-  ];
-  
-  // Remove all meme keys and ensure no old data persists
-  if (ctx.session) {
-    // Save important system properties
-    const scenes = ctx.session.__scenes;
-    const language = ctx.i18n?.locale();
-    
-    // Reset to a clean session
-    ctx.session = { __scenes: scenes } as any;
-    
-    // Restore language
-    if (language && ctx.i18n) {
-      ctx.i18n.locale(language);
-    }
-  }
-  
-  // Show the Start Meme Flow button
-  await ctx.reply('Ready to start meme creation?', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '▶️ Start Meme Flow', callback_data: 'memes_start' }]
-      ]
-    }
-  });
-});
+// NOTE: generate_memes callback handler moved to callback.handler.ts to avoid conflicts
 
 bot.action('starter_pack', async (ctx) => {
   await ctx.answerCbQuery();
