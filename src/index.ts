@@ -486,14 +486,14 @@ function calculateMemeCost(quality: string): number {
 const startBot = async () => {
   console.log('startBot function is running...');
   try {
-    // Check if LocalStack is running by ensuring the S3 bucket exists
+    // Check if Cloudinary is configured and accessible
     try {
       await storageService.ensureBucketExists();
-      console.log('LocalStack is running and bucket is ready');
+      console.log('✅ Cloudinary is configured and ready for image storage');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn('LocalStack may not be available:', errorMessage);
-      console.warn('Continuing anyway, but S3 storage operations may fail');
+      console.warn('❌ Cloudinary may not be available:', errorMessage);
+      console.warn('⚠️ Continuing anyway, but image storage operations may fail');
     }
     
     // Start the image generation worker
@@ -908,7 +908,22 @@ const startBot = async () => {
           }
         } catch (error) {
           console.error(`[ImageWorker] Error in job ${job.id}:`, error);
-          await bot.telegram.sendMessage(chatId, 'Sorry, there was an error processing your request. Please try again.');
+          
+          // Clear any "still working" intervals when job fails
+          try {
+            // Try to notify user of job failure
+            if (name === 'generate-logo') {
+              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your logo. Please try again.');
+            } else if (name === 'generate-meme') {
+              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your meme. Please try again.');
+            } else if (name === 'generate-sticker') {
+              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your stickers. Please try again.');
+            } else {
+              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error processing your request. Please try again.');
+            }
+          } catch (notifyError) {
+            console.error(`[ImageWorker] Could not notify user of job failure:`, notifyError);
+          }
         }
       });
     } catch (workerError) {
