@@ -23,7 +23,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.802.0",
     "@fal-ai/client": "^1.4.0",
     "@imgly/background-removal": "^1.6.0",
     "@imgly/background-removal-node": "^1.4.3",
@@ -36,8 +35,8 @@
     "@types/node-fetch": "^2.6.12",
     "@types/sharp": "^0.31.1",
     "agenda": "^5.0.0",
-    "aws-sdk": "^2.1692.0",
     "axios": "^1.9.0",
+    "cloudinary": "^2.7.0",
     "dotenv": "^16.3.1",
     "express": "^5.1.0",
     "image-size": "^2.0.2",
