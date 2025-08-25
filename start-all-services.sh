@@ -80,26 +80,9 @@ for i in {1..15}; do
 done
 
 echo ""
-echo "🐳 Starting LocalStack (S3)..."
-# Check if LocalStack container exists and remove it
-docker rm -f localstack 2>/dev/null || true
-
-# Start LocalStack
-docker run -d --name localstack -p 4566:4566 -e SERVICES=s3 localstack/localstack
-
-# Wait for LocalStack to be ready
-echo "⏳ Waiting for LocalStack to be ready..."
-for i in {1..15}; do
-    if curl -s http://localhost:4566/health >/dev/null 2>&1; then
-        echo "✅ LocalStack is ready"
-        break
-    fi
-    sleep 2
-    if [ $i -eq 15 ]; then
-        echo "❌ LocalStack failed to start"
-        exit 1
-    fi
-done
+echo "☁️  Checking Cloudinary connection..."
+# Cloudinary doesn't require local services - it's cloud-based
+echo "✅ Using Cloudinary cloud storage (no local setup required)"
 
 echo ""
 echo "🤖 Starting Telegram Bot..."
@@ -138,12 +121,12 @@ echo ""
 echo "🎉 All services started successfully!"
 echo "========================================"
 echo "🗄️  MongoDB: Running on port 27017"
-echo "🐳 LocalStack: Running on port 4566"
+echo "☁️  Cloudinary: Cloud storage ready"
 echo "🤖 Telegram Bot: Running (PID: $BOT_PID)"
 echo ""
 echo "📊 Service Status:"
 echo "• MongoDB: $(nc -z localhost 27017 2>/dev/null && echo 'Connected' || echo 'Not responding')"
-echo "• LocalStack: $(curl -s http://localhost:4566/health 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo 'Not responding')"
+echo "• Cloudinary: Cloud-based (always available)"
 echo "• Telegram Bot: $(ps -p $BOT_PID > /dev/null && echo 'Running' || echo 'Not running')"
 echo ""
 echo "📝 Logs:"
@@ -154,7 +137,7 @@ echo ""
 
 # Wait for user input to keep script running
 echo "Press Ctrl+C to stop all services..."
-trap 'echo "🛑 Stopping all services..."; kill $BOT_PID 2>/dev/null; pkill -f "mongod"; docker rm -f localstack; exit 0' INT
+trap 'echo "🛑 Stopping all services..."; kill $BOT_PID 2>/dev/null; pkill -f "mongod"; exit 0' INT
 
 # Keep script running
 wait 
