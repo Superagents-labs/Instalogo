@@ -1,11 +1,12 @@
 import dotenv from 'dotenv';
 import path from 'path';
+
+// Load environment variables FIRST before any other imports
+dotenv.config();
+
 import { connectDB } from './db/mongoose';
 import axios from 'axios';
 import { User } from './models/User';
-
-// Load environment variables first
-dotenv.config({ path: path.resolve(process.cwd(), 'development.env') });
 
 import { Telegraf, session, Markup } from 'telegraf';
 import { BotContext } from './types';
@@ -587,12 +588,18 @@ const startBot = async () => {
               });
               
               // Create DB record for the logo
-              const imageGen = await ImageGeneration.create({
-                userId,
-                type: 'logo',
-                cost: idx === 0 ? cost : 0, // Only charge for the first logo
-                imageUrl: logoSet['1024'],
-              });
+              try {
+                console.log(`[ImageWorker] Creating ImageGeneration record for userId: ${userId}, type: logo, cost: ${idx === 0 ? cost : 0}, imageUrl: ${logoSet['1024']}`);
+                const imageGen = await ImageGeneration.create({
+                  userId,
+                  type: 'logo',
+                  cost: idx === 0 ? cost : 0, // Only charge for the first logo
+                  imageUrl: logoSet['1024'],
+                });
+                console.log(`[ImageWorker] Successfully created ImageGeneration record with ID: ${imageGen._id}`);
+              } catch (dbError) {
+                console.error(`[ImageWorker] Error creating ImageGeneration record:`, dbError);
+              }
             }
             
             // Update the user's status if needed
@@ -633,7 +640,13 @@ const startBot = async () => {
             }
             
             // Store all logo sets in MongoDB for this user
-            await mongodbService.setUserLogos(userId, session.generatedLogos);
+            try {
+              console.log(`[ImageWorker] Storing ${session.generatedLogos?.length || 0} logo sets in UserImages for userId: ${userId}`);
+              await mongodbService.setUserLogos(userId, session.generatedLogos);
+              console.log(`[ImageWorker] Successfully stored logo sets in UserImages`);
+            } catch (dbError) {
+              console.error(`[ImageWorker] Error storing logo sets in UserImages:`, dbError);
+            }
             
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-logo)`);
           } else if (name === 'generate-meme') {
@@ -1119,24 +1132,24 @@ bot.action(/buy_stars_(\d+)/, async (ctx) => {
   
   const starsAmount = parseInt(ctx.match[1]);
   
-  // Calculate price based on star amount
-  let price;
+  // Calculate Star price based on credit amount (with discounts)
+  let starPrice: number;
   switch(starsAmount) {
-    case 100: price = 499; break;    // $4.99
-    case 500: price = 1999; break;   // $19.99
-    case 1000: price = 3499; break;  // $34.99
-    case 2500: price = 6999; break;  // $69.99
-    default: price = 499;
+    case 100: starPrice = 100; break;   // 100 Stars = 100 Credits
+    case 500: starPrice = 500; break;   // 500 Stars = 500 Credits  
+    case 1000: starPrice = 950; break;  // 950 Stars = 1000 Credits (5% discount)
+    case 2500: starPrice = 2250; break; // 2250 Stars = 2500 Credits (10% discount)
+    default: starPrice = 100;
   }
   
-  // Create an invoice with TON support
+  // Create a Telegram Stars invoice
   const invoice = {
-    title: `${starsAmount} Stars`,
-    description: `Purchase ${starsAmount} ⭐ stars for your Crypto AI Images`,
+    title: `${starsAmount} Logo Credits`,
+    description: `Purchase ${starsAmount} ⭐ credits for AI logo generation`,
     payload: `stars_${starsAmount}_${ctx.from.id}_${Date.now()}`,
-    provider_token: process.env.PROVIDER_TOKEN || '',
-    currency: 'USD',
-    prices: [{ label: `${starsAmount} Stars`, amount: price }],
+    provider_token: '',              // Empty for Telegram Stars
+    currency: 'XTR',                 // Telegram Stars currency
+    prices: [{ label: `${starsAmount} Credits`, amount: starPrice }], // Direct Stars
     start_parameter: `buy_stars_${starsAmount}`,
   };
   
@@ -1612,5 +1625,19 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
   }
 });
 
-connectDB();
-startBot(); 
+// Connect to MongoDB first, then start the bot
+const initializeApp = async () => {
+  try {
+    console.log('🔄 Connecting to MongoDB Atlas...');
+    await connectDB();
+    console.log('✅ Database connection successful! Connected to instalogo database');
+    console.log('🚀 Starting Telegram bot...');
+    await startBot();
+  } catch (error) {
+    console.error('❌ Failed to initialize application:', error);
+    console.error('💡 Check your MONGODB_URI in .env file');
+    process.exit(1);
+  }
+};
+
+initializeApp(); 

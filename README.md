@@ -50,7 +50,6 @@ REPLICATE_API_TOKEN=your_replicate_api_token_here
 OPENAI_API_KEY=your_openai_api_key_here  # Optional: for text generation
 
 # Database
-MONGO_URI=mongodb://localhost:27017/instalogo
 MONGODB_URI=mongodb://localhost:27017/instalogo
 
 # Storage (LocalStack for development)
@@ -147,7 +146,7 @@ For production, update these in your environment:
 NODE_ENV=production
 WEBHOOK_URL=https://your-domain.com/webhook
 AWS_ENDPOINT=https://s3.amazonaws.com  # Use real S3
-MONGO_URI=mongodb://your-production-mongodb/instalogo
+MONGODB_URI=mongodb://your-production-mongodb/instalogo
 ```
 
 ### Docker Deployment
@@ -218,7 +217,7 @@ Supported languages in `locales/`:
 
 3. **Database connection issues**
    - Ensure MongoDB is running on port 27017
-   - Check MONGO_URI configuration
+   - Check MONGODB_URI configuration
    - Verify database permissions
 
 ### Service Management
