@@ -8,9 +8,26 @@ A powerful Telegram bot that generates high-quality logos, memes, and stickers u
 - 😄 **Meme Generation**: Generate engaging memes for social media
 - 🎯 **Sticker Generation**: Bulk create sticker packs (1-100 stickers)
 - 🌍 **Multi-language Support**: English, Spanish, French, Russian, Chinese
-- 💾 **Persistent Storage**: MongoDB for user data, LocalStack S3 for images
+- 💰 **Telegram Stars Payment**: Direct in-app purchases with volume discounts
+- 💾 **Persistent Storage**: MongoDB for user data, Cloudinary for images
 - 🔄 **Queue System**: BullMQ for handling generation jobs
 - ⚡ **Flux AI**: High-quality image generation via Replicate API
+
+## 💰 Pricing (Telegram Stars)
+
+| Credits | Telegram Stars | Discount | Best For |
+|---------|----------------|----------|----------|
+| 100 | 100 ⭐ | None | Trial users |
+| 500 | 500 ⭐ | None | Regular users |
+| 1000 | 950 ⭐ | **5% OFF** | Power users |
+| 2500 | 2250 ⭐ | **10% OFF** | Businesses |
+
+- **Logo Generation**: 50 credits (2 concepts, multiple sizes)
+- **First Generation**: FREE for new users
+- **Payment**: Direct Telegram Stars (no external processors)
+- **Revenue**: Goes directly to bot owner's Telegram account
+
+📋 [Full Pricing Documentation](PRICING.md) | 🔍 [Quick Reference](PRICING-QUICK-REF.md)
 
 ## Prerequisites
 
