@@ -2,7 +2,7 @@
   "welcome": {
     "title": "BrandForge Bot 🤖",
     "what_to_do": "What would you like to do?",
-    "star_balance": "Your Star Balance",
+    "star_balance": "Your Credits",
     "built_by": "Built by SuperAgent Labs"
   },
   "menu": {
@@ -157,16 +157,17 @@
     "back_to_history": "Back to History"
   },
   "stars": {
-    "choose_amount": "Choose how many stars you would like to purchase:",
-    "stars_100": "100 Stars - $4.99",
-    "stars_500": "500 Stars - $19.99",
-    "stars_1000": "1000 Stars - $34.99",
-    "stars_2500": "2500 Stars - $69.99",
+    "choose_amount": "Choose how many logo credits you would like to purchase:",
+    "stars_100": "100 Credits - 100 ⭐",
+    "stars_500": "500 Credits - 500 ⭐",
+    "stars_1000": "1000 Credits - 950 ⭐ (5% off)",
+    "stars_2500": "2500 Credits - 2250 ⭐ (10% off)",
+    "how_to_buy": "💡 Don't have Stars? Just tap Pay and Telegram will let you buy Stars instantly!",
     "payment_unavailable": "Sorry, payment system is temporarily unavailable. Please try again later.",
-    "payment_successful": "✅ Payment successful! {{amount}} ⭐ stars have been added to your balance. Your new balance is {{balance}} ⭐ stars.",
+    "payment_successful": "✅ Payment successful! {{amount}} logo credits added. Balance: {{balance}} credits.",
     "user_not_found": "User not found. Please contact support.",
     "error_updating": "Payment received but there was an error updating your balance. Please contact support.",
-    "stars_deducted": "{{totalCost}} stars will be deducted from your balance."
+    "stars_deducted": "{{totalCost}} credits will be used for this generation."
   },
   "referral": {
     "welcome_bonus": "🎉 Welcome! You've joined via a referral link. Start using the bot to unlock rewards for your referrer!",

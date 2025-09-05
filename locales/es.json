@@ -2,7 +2,7 @@
   "welcome": {
     "title": "BrandForge Bot 🤖",
     "what_to_do": "¿Qué deseas hacer?",
-    "star_balance": "Tu Balance de Estrellas",
+    "star_balance": "Tus Créditos",
     "built_by": "Creado por SuperAgent Labs"
   },
   "menu": {
@@ -132,14 +132,16 @@
     "back_to_history": "Volver al Historial"
   },
   "stars": {
-    "choose_amount": "Elige cuántas estrellas te gustaría comprar:",
-    "stars_100": "100 Estrellas - $4.99",
-    "stars_500": "500 Estrellas - $19.99",
-    "stars_1000": "1000 Estrellas - $34.99",
-    "stars_2500": "2500 Estrellas - $69.99",
+    "choose_amount": "Elige cuántos créditos de logo te gustaría comprar:",
+    "stars_100": "100 Créditos - 100 ⭐",
+    "stars_500": "500 Créditos - 500 ⭐",
+    "stars_1000": "1000 Créditos - 950 ⭐ (5% desc.)",
+    "stars_2500": "2500 Créditos - 2250 ⭐ (10% desc.)",
+    "how_to_buy": "💡 ¿No tienes Estrellas? Solo toca Pagar y Telegram te permitirá comprar Estrellas al instante!",
     "payment_unavailable": "Lo siento, el sistema de pago está temporalmente no disponible. Por favor, inténtalo más tarde.",
-    "payment_successful": "✅ ¡Pago exitoso! Se han añadido {{amount}} ⭐ estrellas a tu balance. Tu nuevo balance es de {{balance}} ⭐ estrellas.",
+    "payment_successful": "✅ ¡Pago exitoso! {{amount}} créditos de logo añadidos. Balance: {{balance}} créditos.",
     "user_not_found": "Usuario no encontrado. Por favor, contacta con soporte.",
-    "error_updating": "Pago recibido pero hubo un error al actualizar tu balance. Por favor, contacta con soporte."
+    "error_updating": "Pago recibido pero hubo un error al actualizar tu balance. Por favor, contacta con soporte.",
+    "stars_deducted": "{{totalCost}} créditos serán usados para esta generación."
   }
 } 
