@@ -301,7 +301,7 @@ bot.command('referral', async (ctx) => {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.')}` }],
+              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.')}` }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
           }
@@ -946,12 +946,11 @@ const startBot = async () => {
     console.log('About to launch bot...');
     // Set the bot's description (shown above the START button) and short description
     await bot.telegram.setMyDescription(
-      '🚀 BrandForge Bot 🤖\n'
+      '🚀 Instalogo Bot 🤖\n'
       + 'AI Logo & Branding\n'
-      + '�� Blockchain-ready\n'
       + '✨ SuperAgent Labs'
     );
-    await bot.telegram.setMyShortDescription('BrandForge Bot — AI Crypto Logo');
+    await bot.telegram.setMyShortDescription('Instalogo Bot — AI Crypto Logo');
     try {
       await bot.launch();
       console.log('Bot launched!');
@@ -1372,7 +1371,7 @@ bot.action('referral_menu', async (ctx) => {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.')}` }],
+              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.')}` }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
           }
@@ -1594,7 +1593,7 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
     
     if (stats.referralCode) {
       const referralLink = `https://t.me/${ctx.botInfo.username}?start=${stats.referralCode}`;
-      const shareText = `🎨 Check out this amazing meme I created with BrandForge Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
+      const shareText = `🎨 Check out this amazing meme I created with Instalogo Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
       
       await ctx.reply(
         `📤 *Share Your Meme & Earn Stars!*\n\n` +
