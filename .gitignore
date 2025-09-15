@@ -1,44 +1,46 @@
-# Node dependencies
+# Dependencies
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Environment files
-.env
-development.env
-.env.*
-
-# Editor/IDE files
-.vscode/
-.idea/
-.DS_Store
-
-# Telegraf session or cache (if any)
-session.json
-
-# Build outputs
+# Production build
 dist/
 build/
 
-# Log files
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
 *.log
+logs/
+critical-errors.log
+dspy-service.log
+dspy-service-debug.log
+telegram-bot.log
 
-# Tool/Editor state
-.cursor/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Database dumps or local data
-dump.rdb
-
-# OS generated files
+# OS
+.DS_Store
 Thumbs.db
 
-# Python virtual environment (not needed for this project)
-venv/
-.venv/
+# Test files (exclude from deployment)
+test-webhook-*.js
+simple-webhook-test.js
 
-# Misc
-.env.local
-.env.production
-.env.development
+# Farcaster project (separate deployment)
+Instalogo-Farcaster/
+setup-instalogo-farcaster.sh
 
-# Ignore yarn and npm lock files if not needed (optional)
-# yarn.lock
-# package-lock.json 
+# Temporary files
+*.tmp
+*.temp
