@@ -5,13 +5,14 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/src/index.js",
+    "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "lint": "eslint . --ext .ts",
     "test": "jest",
     "start:all": "./start-all-services.sh",
     "stop:all": "./stop-all-services.sh",
-    "restart:all": "./stop-all-services.sh && ./start-all-services.sh"
+    "restart:all": "./stop-all-services.sh && ./start-all-services.sh",
+    "postinstall": "npx sharp-installer || true"
   },
   "keywords": [
     "telegram",
