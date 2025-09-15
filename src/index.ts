@@ -7,6 +7,7 @@ dotenv.config();
 import { connectDB } from './db/mongoose';
 import axios from 'axios';
 import { User } from './models/User';
+import { createWebhookServer } from './webhook';
 
 import { Telegraf, session, Markup } from 'telegraf';
 import { BotContext } from './types';
@@ -951,16 +952,48 @@ const startBot = async () => {
       + '✨ SuperAgent Labs'
     );
     await bot.telegram.setMyShortDescription('Instalogo Bot — AI Crypto Logo');
-    try {
-      await bot.launch();
-      console.log('Bot launched!');
-    } catch (err) {
-      console.error('Error launching bot:', err);
+    
+    // Deployment mode switching: webhook for production, polling for development
+    const isProduction = process.env.NODE_ENV === 'production';
+    const webhookUrl = process.env.WEBHOOK_URL;
+    
+    if (isProduction && webhookUrl) {
+      // Production mode: Use webhooks (recommended for Render deployment)
+      console.log('🌐 Starting in WEBHOOK mode (production)');
+      
+      try {
+        const webhookServer = createWebhookServer(bot);
+        await webhookServer.setWebhook(webhookUrl);
+        await webhookServer.startServer();
+        console.log('✅ Webhook server started successfully');
+      } catch (err) {
+        console.error('❌ Webhook setup failed, falling back to polling:', err);
+        // Fallback to polling if webhook fails
+        await bot.launch();
+        console.log('🔄 Bot launched with polling fallback');
+      }
+    } else {
+      // Development mode: Use long polling (easier for local development)
+      console.log('📡 Starting in POLLING mode (development)');
+      
+      try {
+        await bot.launch();
+        console.log('✅ Bot launched with polling');
+      } catch (err) {
+        console.error('❌ Error launching bot:', err);
+        throw err;
+      }
     }
     
-    // Enable graceful stop
-    process.once('SIGINT', () => bot.stop('SIGINT'));
-    process.once('SIGTERM', () => bot.stop('SIGTERM'));
+    // Enable graceful stop for both modes
+    const gracefulStop = (signal: string) => {
+      console.log(`🔄 Received ${signal}, shutting down gracefully...`);
+      bot.stop(signal);
+      process.exit(0);
+    };
+    
+    process.once('SIGINT', () => gracefulStop('SIGINT'));
+    process.once('SIGTERM', () => gracefulStop('SIGTERM'));
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Failed to start bot:', errorMessage);
