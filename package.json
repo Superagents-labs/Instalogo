@@ -24,8 +24,7 @@
   "author": "",
   "license": "ISC",
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
+    "node": "20.x"
   },
   "dependencies": {
     "@fal-ai/client": "^1.4.0",
@@ -45,7 +44,7 @@
     "replicate": "^1.0.1",
     "sharp": "0.32.6",
     "telegraf": "^4.16.3",
-    "telegraf-i18n": "^6.6.0"
+    "telegraf-i18n": "^7.0.0"
   },
   "devDependencies": {
     "@types/axios": "^0.9.36",
@@ -66,7 +65,4 @@
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.1.6"
   },
-  "engines": {
-    "node": "18.x"
-  }
 }
