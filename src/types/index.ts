@@ -59,12 +59,12 @@ export interface GeneratedLogo {
 }
 
 /**
- * Storage options for S3
+ * Storage options for Cloudinary
  */
 export interface StorageOptions {
-  bucket?: string;
-  key: string;
-  contentType: string;
+  key?: string;
+  contentType?: string;
+  folder?: string;
 }
 
 /**
