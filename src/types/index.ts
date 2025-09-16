@@ -2,7 +2,7 @@ import { Scenes } from 'telegraf';
 import { IUser } from '../models/User';
 // Simple i18n interface to replace telegraf-i18n
 interface SimpleI18n {
-  t: (key: string) => string;
+  t: (key: string, variables?: Record<string, any>) => string;
   locale: (lang?: string) => string;
 }
 

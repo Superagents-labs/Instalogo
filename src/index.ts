@@ -84,7 +84,6 @@ bot.use(ensureSessionCleanup());
 bot.use(userLoader);
 
 // Add i18n middleware
-bot.use(i18n.middleware());
 bot.use(i18nMiddleware);
 
 // Keep track of last command execution time per user

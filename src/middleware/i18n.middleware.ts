@@ -71,9 +71,19 @@ const i18n = new SimpleI18n({
 export const i18nMiddleware = async (ctx: BotContext, next: any) => {
   // Add simple i18n methods to context
   ctx.i18n = {
-    t: (key: string) => {
+    t: (key: string, variables?: Record<string, any>) => {
       const lang = ctx.dbUser?.language || ctx.from?.language_code?.split('-')[0] || 'en';
-      return i18n.t(key, lang);
+      let translation = i18n.t(key, lang);
+      
+      // Replace template variables if provided
+      if (variables) {
+        Object.keys(variables).forEach(varKey => {
+          const placeholder = `{{${varKey}}}`;
+          translation = translation.replace(new RegExp(placeholder, 'g'), variables[varKey]);
+        });
+      }
+      
+      return translation;
     },
     locale: (lang?: string) => {
       if (lang && ctx.dbUser) {
