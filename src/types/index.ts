@@ -1,6 +1,10 @@
 import { Scenes } from 'telegraf';
 import { IUser } from '../models/User';
-import { I18n } from 'telegraf-i18n';
+// Simple i18n interface to replace telegraf-i18n
+interface SimpleI18n {
+  t: (key: string) => string;
+  locale: (lang?: string) => string;
+}
 
 /**
  * Custom session data structure
@@ -36,7 +40,7 @@ export interface SessionData extends Scenes.WizardSessionData {
  */
 export interface BotContext extends Scenes.WizardContext<SessionData> {
   dbUser?: IUser;
-  i18n: I18n;
+  i18n: SimpleI18n;
 }
 
 /**

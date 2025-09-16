@@ -1,55 +1,88 @@
-// @ts-nocheck - Disable TypeScript checking for this file due to i18n integration
-import TelegrafI18n from 'telegraf-i18n';
+// Simple i18n replacement to avoid telegraf-i18n dependency issues
 import path from 'path';
 import { BotContext } from '../types';
 import { Scenes } from 'telegraf';
 import fs from 'fs';
 
-// Find available languages by reading the locales directory
-const getAvailableLanguages = (): string[] => {
-  const localesDir = path.resolve(process.cwd(), 'locales');
-  if (!fs.existsSync(localesDir)) {
-    console.error(`Locales directory '${localesDir}' not found`);
-    return ['en']; // Default to English if directory not found
+// Simple i18n class to replace telegraf-i18n
+class SimpleI18n {
+  private translations: { [lang: string]: any } = {};
+  private defaultLanguage: string = 'en';
+
+  constructor(options: { defaultLanguage: string; directory: string }) {
+    this.defaultLanguage = options.defaultLanguage;
+    this.loadTranslations(options.directory);
   }
-  
-  return fs.readdirSync(localesDir)
-    .filter(file => file.endsWith('.json'))
-    .map(file => path.basename(file, '.json'));
-};
+
+  private loadTranslations(directory: string) {
+    try {
+      if (!fs.existsSync(directory)) {
+        console.warn(`Locales directory '${directory}' not found, using default messages`);
+        // Create default English translations
+        this.translations.en = {
+          welcome: { greeting: "Welcome to Instalogo Bot!" },
+          errors: { generic: "An error occurred. Please try again." }
+        };
+        return;
+      }
+
+      const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
+      for (const file of files) {
+        const lang = path.basename(file, '.json');
+        const content = fs.readFileSync(path.join(directory, file), 'utf8');
+        this.translations[lang] = JSON.parse(content);
+      }
+    } catch (error) {
+      console.error('Error loading translations:', error);
+      // Fallback to default
+      this.translations.en = {
+        welcome: { greeting: "Welcome to Instalogo Bot!" },
+        errors: { generic: "An error occurred. Please try again." }
+      };
+    }
+  }
+
+  t(key: string, lang: string = this.defaultLanguage): string {
+    const keys = key.split('.');
+    let value = this.translations[lang] || this.translations[this.defaultLanguage];
+    
+    for (const k of keys) {
+      value = value?.[k];
+      if (!value) break;
+    }
+    
+    return value || key; // Return key if translation not found
+  }
+
+  getAvailableLanguages(): string[] {
+    return Object.keys(this.translations);
+  }
+}
 
 // Create i18n instance
-const i18n = new TelegrafI18n({
+const i18n = new SimpleI18n({
   defaultLanguage: 'en',
-  allowMissing: true, // If a key is missing in a language, it will use the default language
   directory: path.resolve(process.cwd(), 'locales')
 });
 
-// Add a custom method to get available languages
-i18n.getAvailableLanguages = getAvailableLanguages;
-
 /**
- * Middleware to detect and set the user's language
+ * Middleware to add simple i18n to context
  */
 export const i18nMiddleware = async (ctx: BotContext, next: any) => {
-  // If user exists in database and has a preferred language, use it
-  if (ctx.dbUser && ctx.dbUser.language) {
-    ctx.i18n.locale(ctx.dbUser.language);
-  } else if (ctx.from && ctx.from.language_code) {
-    // Try to use Telegram's language preference
-    const langCode = ctx.from.language_code.split('-')[0]; // handle 'en-US' format
-    
-    // Check if we have this language
-    if (getAvailableLanguages().includes(langCode)) {
-      ctx.i18n.locale(langCode);
-      
-      // Save user's language preference if we have a DB user
-      if (ctx.dbUser) {
-        ctx.dbUser.language = langCode;
-        await ctx.dbUser.save().catch(e => console.error('Error saving user language preference:', e));
+  // Add simple i18n methods to context
+  ctx.i18n = {
+    t: (key: string) => {
+      const lang = ctx.dbUser?.language || ctx.from?.language_code?.split('-')[0] || 'en';
+      return i18n.t(key, lang);
+    },
+    locale: (lang?: string) => {
+      if (lang && ctx.dbUser) {
+        ctx.dbUser.language = lang;
+        ctx.dbUser.save().catch(e => console.error('Error saving language:', e));
       }
+      return ctx.dbUser?.language || 'en';
     }
-  }
+  };
   
   return next();
 };
@@ -58,18 +91,19 @@ export const i18nMiddleware = async (ctx: BotContext, next: any) => {
  * Function to extend the Stage with i18n middleware
  */
 export const extendStageWithI18n = (stage: Scenes.Stage<BotContext>) => {
-  // Add a middleware that ensures i18n is properly passed to all scenes
+  // Add middleware to ensure i18n is available in scenes
   stage.use((ctx, next) => {
-    // Make sure i18n is accessible in scenes
-    if (ctx.i18n) {
-      return next();
-    } else {
-      console.error('i18n instance not found in context when entering scene');
-      return next();
+    if (!ctx.i18n) {
+      // Add simple fallback i18n if missing
+      ctx.i18n = {
+        t: (key: string) => key,
+        locale: () => 'en'
+      };
     }
+    return next();
   });
   
   return stage;
 };
 
-export default i18n; 
+export default i18n;
