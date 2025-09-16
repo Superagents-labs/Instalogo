@@ -25,7 +25,7 @@ export class WebhookServer {
     this.app.use(express.json({ limit: '50mb' }));
     
     // Basic security headers
-    this.app.use((req, res, next) => {
+    this.app.use((req: Request, res: Response, next: any) => {
       res.header('X-Powered-By', 'Instalogo-Bot');
       next();
     });
