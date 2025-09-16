@@ -6,7 +6,7 @@ services:
     nodeVersion: 20
     region: oregon # or singapore for better global performance
     plan: starter # upgrade to standard for production
-    buildCommand: npm run build --legacy-peer-deps
+    buildCommand: npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
