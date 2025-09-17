@@ -2,11 +2,11 @@
   "name": "telegram-logo-bot",
   "version": "1.0.0",
   "description": "Telegram bot for generating business logos using OpenAI",
-  "main": "dist/src/index.js",
+  "main": "dist/index.js",
   "scripts": {
     "prebuild": "npm install --force",
     "build": "tsc",
-    "start": "node dist/src/index.js",
+    "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "lint": "eslint . --ext .ts",
     "test": "jest",
