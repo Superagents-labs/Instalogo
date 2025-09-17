@@ -151,15 +151,13 @@ function logErrorWithRef(error: any) {
 export function createStickerWizardScene(openaiService: OpenAIService): Scenes.WizardScene<BotContext> {
   const scene = new Scenes.WizardScene<BotContext>(
     'stickerWizard',
-    // Step 1: Show upload message and wait for image or skip
+    // Step 1: Logo upload or skip
     async (ctx) => {
-      // Check if this is the initial entry (not from a user input)
-      if (!ctx.message) {
-        await ctx.reply(ctx.i18n.t('stickers.upload_image'));
-        return; // Wait for user input
-      }
-      
-      // Handle user input in step 1
+      await ctx.reply(ctx.i18n.t('stickers.upload_image'));
+      return ctx.wizard.next();
+    },
+    // Step 2: Style selection
+    async (ctx) => {
       if (ctx.message && 'photo' in ctx.message) {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         (ctx.session as any).stickerImageFileId = photo.file_id;
@@ -176,7 +174,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         return;
       }
     },
-    // Step 2: Phrases/emojis
+    // Step 3: Phrases/emojis
     async (ctx) => {
       if (ctx.message && 'text' in ctx.message) {
         (ctx.session as any).stickerStyle = ctx.message.text;
@@ -186,7 +184,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         await ctx.reply(ctx.i18n.t('stickers.enter_style'));
       }
     },
-    // Step 3: Sticker count
+    // Step 4: Sticker count
     async (ctx) => {
       if (ctx.message && 'text' in ctx.message) {
         (ctx.session as any).stickerPhrases = ctx.message.text;
@@ -196,7 +194,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         await ctx.reply(ctx.i18n.t('stickers.enter_phrases'));
       }
     },
-    // Step 4: Generate stickers (with batching/throttling and Telegram upload)
+    // Step 5: Generate stickers (with batching/throttling and Telegram upload)
     async (ctx) => {
       // Add retry counter for invalid input
       if (!ctx.session.__retries) ctx.session.__retries = 0;
@@ -267,7 +265,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
     }
   );
   
-  // Add an enter handler to reset session state and show initial message
+  // Add an enter handler to reset session state
   scene.enter(async (ctx) => {
     // Reset all sticker-related session data
     const stickerKeys = [
@@ -280,11 +278,8 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
       delete (ctx.session as any)[key];
     }
     
-    // Immediately show the upload message when entering the scene
-    await ctx.reply(ctx.i18n.t('stickers.upload_image'));
-    
     // Don't use selectStep here - let the scene start naturally
-    // The first handler will be called automatically when user responds
+    // The first handler will be called automatically
   });
   
   // Confirm sticker generation

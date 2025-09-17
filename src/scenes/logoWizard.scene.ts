@@ -465,7 +465,17 @@ export function createLogoWizardScene(
           useDSPy: false // Disable DSPy - use basic prompts
         }, { timeout: 300000 });
         
-        // No "still working" messages - user gets immediate feedback and results when ready
+        // Start periodic 'still working' updates
+        const chatId = ctx.chat?.id;
+        let stillWorking = true;
+        let intervalId = setInterval(() => {
+          if (stillWorking && chatId) {
+            ctx.telegram.sendMessage(chatId, 'Still working on your logo...');
+          }
+        }, 60000);
+        
+        // Store intervalId in session to clear later
+        ctx.session.__logoStillWorkingInterval = intervalId;
         const costMsg = !ctx.dbUser?.freeGenerationUsed ? ctx.i18n.t('stickers.free_generation') : ctx.i18n.t('stars.stars_deducted', { totalCost: 50 });
         await ctx.reply(ctx.i18n.t('logo.request_queued', { costMessage: costMsg }));
       } catch (error) {

@@ -3,10 +3,9 @@ services:
     name: instalogo-bot
     env: node
     runtime: node
-    nodeVersion: 20
-    region: oregon # or singapore for better global performance
-    plan: starter # upgrade to standard for production
-    buildCommand: npm run build
+    region: oregon
+    plan: starter
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
@@ -19,17 +18,17 @@ services:
       # Add your other environment variables in Render dashboard:
       # BOT_TOKEN, MONGODB_URI, CLOUDINARY_CLOUD_NAME, etc.
     autoDeploy: true
-    branch: storage-fix
+    branch: main
     rootDir: .
-    
+
     # Health check configuration
     healthCheck:
       path: /health
       interval: 30s
       timeout: 10s
       retries: 3
-      
-    # Auto-scaling configuration (optional)
+
+    # Auto-scaling configuration
     scaling:
       minInstances: 1
       maxInstances: 3

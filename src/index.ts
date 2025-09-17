@@ -1,13 +1,12 @@
 import dotenv from 'dotenv';
 import path from 'path';
-
-// Load environment variables FIRST before any other imports
-dotenv.config();
-
 import { connectDB } from './db/mongoose';
 import axios from 'axios';
 import { User } from './models/User';
-// import { createWebhookServer } from './webhook';
+import express from 'express';
+
+// Load environment variables first
+dotenv.config();
 
 import { Telegraf, session, Markup } from 'telegraf';
 import { BotContext } from './types';
@@ -84,6 +83,7 @@ bot.use(ensureSessionCleanup());
 bot.use(userLoader);
 
 // Add i18n middleware
+bot.use(i18n.middleware());
 bot.use(i18nMiddleware);
 
 // Keep track of last command execution time per user
@@ -101,8 +101,10 @@ const wrappedStage = {
   }
 };
 
-// Apply stage middleware only - no scene session reset middleware
+// Apply stage middleware first, then the scene session reset middleware
 bot.use(wrappedStage.middleware());
+// Register scene reset middleware after stage is registered so ctx.scene exists
+bot.use(sceneSessionResetMiddleware());
 
 // Setup callback handlers
 setupCallbackHandlers(bot, openaiService, storageService, mongodbService);
@@ -131,21 +133,6 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
         delete (ctx.session as any)[key];
       }
     }
-    
-    // Clear edit image session flags that persist outside of scenes
-    const editImageKeys = [
-      'awaitingEditPrompt',
-      'stickerEditPrompt', 
-      'awaitingStickerEdit',
-      'awaitingStarterPackImage'
-    ];
-    
-    editImageKeys.forEach(key => {
-      if ((ctx.session as any)[key]) {
-        console.log(`Force clearing edit image session flag: ${key}`);
-        delete (ctx.session as any)[key];
-      }
-    });
   }
 
   if (ctx.scene && ctx.scene.current) {
@@ -160,7 +147,7 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
       // If we can't leave gracefully, we'll still reset the session below
     }
     
-    // Completely reset session including wizard state
+    // Completely reset session
     ctx.session = { 
       __scenes: { current: null, state: {} }
     } as any;
@@ -176,24 +163,14 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
     ctx.session = { __scenes: { current: null, state: {} } } as any;
   } else {
     // Even if not in a scene, clear everything except core structure
-    // This is crucial for wizard scenes that might persist state
-    const language = ctx.i18n?.locale();
     ctx.session = { __scenes: { current: null, state: {} } } as any;
     
     // Restore language if it was set
-    if (language && ctx.i18n) {
-      ctx.i18n.locale(language);
-    }
-  }
-  
-  // Extra safety: If there's still a wizard context, reset it
-  if (ctx.wizard) {
-    try {
-      // Reset wizard cursor to beginning
-      (ctx as any).wizard.cursor = 0;
-      console.log('Reset wizard cursor to 0');
-    } catch (err) {
-      console.log('Could not reset wizard cursor:', err);
+    if (ctx.i18n) {
+      const lang = ctx.i18n.locale();
+      if (lang) {
+        ctx.i18n.locale(lang);
+      }
     }
   }
 }
@@ -301,7 +278,7 @@ bot.command('referral', async (ctx) => {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.')}` }],
+              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.')}` }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
           }
@@ -344,7 +321,43 @@ bot.hears('Generate Memes', async (ctx) => {
   await ctx.scene.enter('memeWizard');
 });
 
-// NOTE: generate_memes callback handler moved to callback.handler.ts to avoid conflicts
+// New: Inline button callback handler for 'Generate Memes'
+bot.action('generate_memes', async (ctx) => {
+  await ctx.answerCbQuery();
+  await forceLeaveCurrentScene(ctx);
+  
+  // Completely reset ALL meme-related session data
+  const memeKeys = [
+    'memeImageFileId', 'memeImageSkipped', 'memeTopic', 
+    'memeAudience', 'memeMood', 'memeElements', 
+    'memeCatch', 'memeFormat', 'memeColor', 'memeStyle', 
+    'memeStyleDesc', 'memeText', 'awaitingCustomMemeStyle'
+  ];
+  
+  // Remove all meme keys and ensure no old data persists
+  if (ctx.session) {
+    // Save important system properties
+    const scenes = ctx.session.__scenes;
+    const language = ctx.i18n?.locale();
+    
+    // Reset to a clean session
+    ctx.session = { __scenes: scenes } as any;
+    
+    // Restore language
+    if (language && ctx.i18n) {
+      ctx.i18n.locale(language);
+    }
+  }
+  
+  // Show the Start Meme Flow button
+  await ctx.reply('Ready to start meme creation?', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '▶️ Start Meme Flow', callback_data: 'memes_start' }]
+      ]
+    }
+  });
+});
 
 bot.action('starter_pack', async (ctx) => {
   await ctx.answerCbQuery();
@@ -487,14 +500,14 @@ function calculateMemeCost(quality: string): number {
 const startBot = async () => {
   console.log('startBot function is running...');
   try {
-    // Check if Cloudinary is configured and accessible
+    // Check if LocalStack is running by ensuring the S3 bucket exists
     try {
       await storageService.ensureBucketExists();
-      console.log('✅ Cloudinary is configured and ready for image storage');
+      console.log('LocalStack is running and bucket is ready');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn('❌ Cloudinary may not be available:', errorMessage);
-      console.warn('⚠️ Continuing anyway, but image storage operations may fail');
+      console.warn('LocalStack may not be available:', errorMessage);
+      console.warn('Continuing anyway, but S3 storage operations may fail');
     }
     
     // Start the image generation worker
@@ -588,18 +601,12 @@ const startBot = async () => {
               });
               
               // Create DB record for the logo
-              try {
-                console.log(`[ImageWorker] Creating ImageGeneration record for userId: ${userId}, type: logo, cost: ${idx === 0 ? cost : 0}, imageUrl: ${logoSet['1024']}`);
-                const imageGen = await ImageGeneration.create({
-                  userId,
-                  type: 'logo',
-                  cost: idx === 0 ? cost : 0, // Only charge for the first logo
-                  imageUrl: logoSet['1024'],
-                });
-                console.log(`[ImageWorker] Successfully created ImageGeneration record with ID: ${imageGen._id}`);
-              } catch (dbError) {
-                console.error(`[ImageWorker] Error creating ImageGeneration record:`, dbError);
-              }
+              const imageGen = await ImageGeneration.create({
+                userId,
+                type: 'logo',
+                cost: idx === 0 ? cost : 0, // Only charge for the first logo
+                imageUrl: logoSet['1024'],
+              });
             }
             
             // Update the user's status if needed
@@ -640,13 +647,7 @@ const startBot = async () => {
             }
             
             // Store all logo sets in MongoDB for this user
-            try {
-              console.log(`[ImageWorker] Storing ${session.generatedLogos?.length || 0} logo sets in UserImages for userId: ${userId}`);
-              await mongodbService.setUserLogos(userId, session.generatedLogos);
-              console.log(`[ImageWorker] Successfully stored logo sets in UserImages`);
-            } catch (dbError) {
-              console.error(`[ImageWorker] Error storing logo sets in UserImages:`, dbError);
-            }
+            await mongodbService.setUserLogos(userId, session.generatedLogos);
             
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-logo)`);
           } else if (name === 'generate-meme') {
@@ -921,22 +922,7 @@ const startBot = async () => {
           }
         } catch (error) {
           console.error(`[ImageWorker] Error in job ${job.id}:`, error);
-          
-          // Clear any "still working" intervals when job fails
-          try {
-            // Try to notify user of job failure
-            if (name === 'generate-logo') {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your logo. Please try again.');
-            } else if (name === 'generate-meme') {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your meme. Please try again.');
-            } else if (name === 'generate-sticker') {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your stickers. Please try again.');
-            } else {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error processing your request. Please try again.');
-            }
-          } catch (notifyError) {
-            console.error(`[ImageWorker] Could not notify user of job failure:`, notifyError);
-          }
+          await bot.telegram.sendMessage(chatId, 'Sorry, there was an error processing your request. Please try again.');
         }
       });
     } catch (workerError) {
@@ -946,50 +932,99 @@ const startBot = async () => {
     console.log('About to launch bot...');
     // Set the bot's description (shown above the START button) and short description
     await bot.telegram.setMyDescription(
-      '🚀 Instalogo Bot 🤖\n'
+      '🚀 BrandForge Bot 🤖\n'
       + 'AI Logo & Branding\n'
+      + '�� Blockchain-ready\n'
       + '✨ SuperAgent Labs'
     );
-    await bot.telegram.setMyShortDescription('Instalogo Bot — AI Crypto Logo');
+    await bot.telegram.setMyShortDescription('BrandForge Bot — AI Crypto Logo');
     
-    // Deployment mode switching: webhook for production, polling for development
+    // Check if we're in production with webhook URL
     const isProduction = process.env.NODE_ENV === 'production';
     const webhookUrl = process.env.WEBHOOK_URL;
-    
-    // Temporarily disable webhooks to get basic deployment working
-    // if (isProduction && webhookUrl) {
-    //   console.log('🌐 Starting in WEBHOOK mode (production)');
-    //   try {
-    //     const webhookServer = createWebhookServer(bot);
-    //     await webhookServer.setWebhook(webhookUrl);
-    //     await webhookServer.startServer();
-    //     console.log('✅ Webhook server started successfully');
-    //   } catch (err) {
-    //     console.error('❌ Webhook setup failed, falling back to polling:', err);
-    //     await bot.launch();
-    //     console.log('🔄 Bot launched with polling fallback');
-    //   }
-    // }
-    
-    // Force polling mode for now (temporary fix)
-    console.log('📡 Starting in POLLING mode (temporary)');
-    try {
-      await bot.launch();
-      console.log('✅ Bot launched with polling');
-    } catch (err) {
-      console.error('❌ Error launching bot:', err);
-      throw err;
+    const port = parseInt(process.env.PORT || '3000', 10);
+
+    if (isProduction && webhookUrl) {
+      console.log('🌐 Starting in WEBHOOK mode (production)');
+      
+      // Create Express app for webhook
+      const app = express();
+      app.use(express.json());
+      
+      // Health check endpoint
+      app.get('/health', async (req, res) => {
+        try {
+          const botInfo = await bot.telegram.getMe();
+          res.json({
+            status: 'healthy',
+            bot: {
+              username: botInfo.username,
+              id: botInfo.id,
+              first_name: botInfo.first_name
+            },
+            server: {
+              uptime: process.uptime(),
+              timestamp: new Date().toISOString()
+            }
+          });
+        } catch (error) {
+          res.status(503).json({
+            status: 'unhealthy',
+            error: error instanceof Error ? error.message : 'Unknown error',
+            timestamp: new Date().toISOString()
+          });
+        }
+      });
+      
+      // Webhook endpoint
+      app.post(`/webhook/${process.env.BOT_TOKEN}`, (req, res) => {
+        try {
+          bot.handleUpdate(req.body, res);
+        } catch (error) {
+          console.error('Webhook error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      });
+      
+      // Root endpoint
+      app.get('/', (req, res) => {
+        res.json({
+          status: 'ok',
+          service: 'Instalogo Bot',
+          mode: 'webhook',
+          timestamp: new Date().toISOString()
+        });
+      });
+      
+      // Set webhook
+      try {
+        await bot.telegram.setWebhook(webhookUrl);
+        console.log(`✅ Webhook set to: ${webhookUrl}`);
+        
+        // Start Express server
+        app.listen(port, () => {
+          console.log(`🚀 Webhook server running on port ${port}`);
+        });
+        
+      } catch (error) {
+        console.error('❌ Failed to set webhook:', error);
+        throw error;
+      }
+      
+    } else {
+      console.log('📡 Starting in POLLING mode (development)');
+      try {
+        await bot.launch();
+        console.log('✅ Bot launched with polling');
+      } catch (err) {
+        console.error('❌ Error launching bot:', err);
+        throw err;
+      }
     }
     
-    // Enable graceful stop for both modes
-    const gracefulStop = (signal: string) => {
-      console.log(`🔄 Received ${signal}, shutting down gracefully...`);
-      bot.stop(signal);
-      process.exit(0);
-    };
-    
-    process.once('SIGINT', () => gracefulStop('SIGINT'));
-    process.once('SIGTERM', () => gracefulStop('SIGTERM'));
+    // Enable graceful stop
+    process.once('SIGINT', () => bot.stop('SIGINT'));
+    process.once('SIGTERM', () => bot.stop('SIGTERM'));
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Failed to start bot:', errorMessage);
@@ -1160,24 +1195,24 @@ bot.action(/buy_stars_(\d+)/, async (ctx) => {
   
   const starsAmount = parseInt(ctx.match[1]);
   
-  // Calculate Star price based on credit amount (with discounts)
-  let starPrice: number;
+  // Calculate price based on star amount
+  let price;
   switch(starsAmount) {
-    case 100: starPrice = 100; break;   // 100 Stars = 100 Credits
-    case 500: starPrice = 500; break;   // 500 Stars = 500 Credits  
-    case 1000: starPrice = 950; break;  // 950 Stars = 1000 Credits (5% discount)
-    case 2500: starPrice = 2250; break; // 2250 Stars = 2500 Credits (10% discount)
-    default: starPrice = 100;
+    case 100: price = 499; break;    // $4.99
+    case 500: price = 1999; break;   // $19.99
+    case 1000: price = 3499; break;  // $34.99
+    case 2500: price = 6999; break;  // $69.99
+    default: price = 499;
   }
   
-  // Create a Telegram Stars invoice
+  // Create an invoice with TON support
   const invoice = {
-    title: `${starsAmount} Logo Credits`,
-    description: `Purchase ${starsAmount} ⭐ credits for AI logo generation`,
+    title: `${starsAmount} Stars`,
+    description: `Purchase ${starsAmount} ⭐ stars for your Crypto AI Images`,
     payload: `stars_${starsAmount}_${ctx.from.id}_${Date.now()}`,
-    provider_token: '',              // Empty for Telegram Stars
-    currency: 'XTR',                 // Telegram Stars currency
-    prices: [{ label: `${starsAmount} Credits`, amount: starPrice }], // Direct Stars
+    provider_token: process.env.PROVIDER_TOKEN || '',
+    currency: 'USD',
+    prices: [{ label: `${starsAmount} Stars`, amount: price }],
     start_parameter: `buy_stars_${starsAmount}`,
   };
   
@@ -1400,7 +1435,7 @@ bot.action('referral_menu', async (ctx) => {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.')}` }],
+              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.')}` }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
           }
@@ -1622,7 +1657,7 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
     
     if (stats.referralCode) {
       const referralLink = `https://t.me/${ctx.botInfo.username}?start=${stats.referralCode}`;
-      const shareText = `🎨 Check out this amazing meme I created with Instalogo Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
+      const shareText = `🎨 Check out this amazing meme I created with BrandForge Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
       
       await ctx.reply(
         `📤 *Share Your Meme & Earn Stars!*\n\n` +
@@ -1653,19 +1688,5 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
   }
 });
 
-// Connect to MongoDB first, then start the bot
-const initializeApp = async () => {
-  try {
-    console.log('🔄 Connecting to MongoDB Atlas...');
-    await connectDB();
-    console.log('✅ Database connection successful! Connected to instalogo database');
-    console.log('🚀 Starting Telegram bot...');
-    await startBot();
-  } catch (error) {
-    console.error('❌ Failed to initialize application:', error);
-    console.error('💡 Check your MONGODB_URI in .env file');
-    process.exit(1);
-  }
-};
-
-initializeApp(); 
+connectDB();
+startBot(); 
