@@ -18,7 +18,7 @@ services:
       # Add your other environment variables in Render dashboard:
       # BOT_TOKEN, MONGODB_URI, CLOUDINARY_CLOUD_NAME, etc.
     autoDeploy: true
-    branch: main
+    branch: render-deploy
     rootDir: .
 
     # Health check configuration
