@@ -4,6 +4,7 @@
   "description": "Telegram bot for generating business logos using OpenAI",
   "main": "dist/src/index.js",
   "scripts": {
+    "prebuild": "npm install --force",
     "build": "tsc",
     "start": "node dist/src/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
