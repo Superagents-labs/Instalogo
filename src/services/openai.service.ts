@@ -313,7 +313,7 @@ export class OpenAIService {
       console.log('Editing image for sticker...');
 
       // Convert buffer to file-like object for OpenAI
-      const imageFile = new Blob([options.image], { type: 'image/png' });
+      const imageFile = new Blob([new Uint8Array(options.image)], { type: 'image/png' });
 
       const response = await this.client.images.edit({
         image: imageFile as any,
