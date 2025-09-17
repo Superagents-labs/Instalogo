@@ -4,7 +4,7 @@
   "description": "Telegram bot for generating business logos using OpenAI",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "npm ci --legacy-peer-deps && tsc",
     "start": "node dist/src/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "lint": "eslint . --ext .ts",
