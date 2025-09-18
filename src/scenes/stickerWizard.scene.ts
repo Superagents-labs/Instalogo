@@ -8,6 +8,7 @@ import createBackgroundRemoval from '@imgly/background-removal-node';
 import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
+import { addUserInterval } from '../utils/intervalManager';
 
 function getStickerPackName(ctx: BotContext) {
   const username = ctx.from?.username || `user${ctx.from?.id}`;
@@ -353,7 +354,10 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
           ctx.telegram.sendMessage(chatId, 'Still working on your stickers...');
         }
       }, 60000);
-      ctx.session.__stickerStillWorkingInterval = intervalId;
+      // Store interval globally instead of in session
+      if (ctx.from?.id) {
+        addUserInterval(ctx.from.id, intervalId);
+      }
       await ctx.reply(ctx.i18n.t('stickers.request_queued', { costMessage }));
       await ctx.scene.leave();
     } catch (error) {

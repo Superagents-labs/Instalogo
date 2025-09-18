@@ -6,6 +6,7 @@ import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
 import { MongoDBService } from '../services/mongodb.service';
+import { addUserInterval } from '../utils/intervalManager';
 
 // Removed hardcoded questions - we'll use i18n translation keys instead
 export function createMemeWizardScene(openaiService: OpenAIService, mongodbService: MongoDBService): Scenes.WizardScene<BotContext> {
@@ -470,7 +471,10 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
         }
       }, 120000); // Increase to 2 minutes between updates (was 60000 = 1 minute)
       
-      ctx.session.__memeStillWorkingInterval = intervalId;
+      // Store interval globally instead of in session
+      if (ctx.from?.id) {
+        addUserInterval(ctx.from.id, intervalId);
+      }
       await ctx.reply(ctx.i18n.t('memes.request_queued', { costMessage }));
     } catch (err) {
       const ref = logErrorWithRef(err);

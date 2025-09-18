@@ -1,6 +1,6 @@
 {
   "welcome": {
-    "title": "BrandForge Bot 🤖",
+    "title": "Instalogo Bot 🤖",
     "what_to_do": "What would you like to do?",
     "star_balance": "Your Star Balance",
     "built_by": "Built by SuperAgent Labs"
@@ -181,7 +181,7 @@
     "they_get": "• They get: No bonus (fair pricing for all)",
     "share_message": "Share your link and earn stars! 🚀",
     "share_link": "📤 Share Link",
-    "share_text": "🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.",
+    "share_text": "🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.",
     "error_generating": "❌ Error generating referral code. Please try again later.",
     "error_accessing": "❌ Error accessing referral system. Please try again later.",
     "conversion_reward": "🎉 Great news! Someone you referred just used the bot and you've earned {{reward}} ⭐ stars!"

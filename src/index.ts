@@ -17,6 +17,7 @@ import { MongoDBService } from './services/mongodb.service';
 import { StorageService } from './services/storage.service';
 
 import { createTelegramStickerPack, addStickerToPack } from './utils/telegramStickerPack';
+import { clearUserIntervals } from './utils/intervalManager';
 import fs from 'fs';
 import { startImageWorker, imageQueue } from './utils/imageQueue';
 import { userLoader } from './middleware/userLoader';
@@ -650,6 +651,9 @@ const startBot = async () => {
             await mongodbService.setUserLogos(userId, session.generatedLogos);
             
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-logo)`);
+            
+            // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
+            clearUserIntervals(userId);
           } else if (name === 'generate-meme') {
             // Get parameters from job data
             const freeGenerationUsed = job.data.freeGenerationUsed || false;
@@ -785,9 +789,15 @@ const startBot = async () => {
               });
               
               console.log(`[ImageWorker] ✅ Meme sent successfully to user ${userId}!`);
+              
+              // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
+              clearUserIntervals(userId);
             } catch (error) {
               console.error(`[ImageWorker] Error in meme generation:`, error);
               await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your meme. Please try again.');
+              
+              // 🧹 CLEAR INTERVALS EVEN ON ERROR
+              clearUserIntervals(userId);
             }
           } else if (name === 'generate-sticker') {
             // Calculate cost based on sticker count and free generation status
@@ -897,6 +907,9 @@ const startBot = async () => {
             }
             
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-sticker)`);
+            
+            // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
+            clearUserIntervals(userId);
           } else if (name === 'edit-sticker') {
             const { prompt, imageBuffer } = job.data;
             console.log(`[ImageWorker] Editing image for sticker with prompt: ${prompt}`);

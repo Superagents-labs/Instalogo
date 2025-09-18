@@ -7,6 +7,7 @@ import { escapeMarkdownV2 } from '../utils/escapeMarkdownV2';
 import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
+import { addUserInterval } from '../utils/intervalManager';
 
 // Define available options for button selections
 const styleOptions = ['Minimalist', 'Elegant', 'Bold', 'Playful', 'Vintage/Retro', 'Modern', 'Corporate/Professional', 'Artistic/Hand-drawn', 'Other (custom)'];
@@ -474,8 +475,10 @@ export function createLogoWizardScene(
           }
         }, 60000);
         
-        // Store intervalId in session to clear later
-        ctx.session.__logoStillWorkingInterval = intervalId;
+        // Store interval globally instead of in session
+        if (ctx.from?.id) {
+          addUserInterval(ctx.from.id, intervalId);
+        }
         const costMsg = !ctx.dbUser?.freeGenerationUsed ? ctx.i18n.t('stickers.free_generation') : ctx.i18n.t('stars.stars_deducted', { totalCost: 50 });
         await ctx.reply(ctx.i18n.t('logo.request_queued', { costMessage: costMsg }));
       } catch (error) {
