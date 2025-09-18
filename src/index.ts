@@ -879,10 +879,12 @@ const startBot = async () => {
                     console.log(`[ImageWorker] Marked free generation as used for user ${userId}`);
                   }
                   
-                  if (totalCost > 0) {
+                  if (totalCost > 0 && process.env.TESTING !== 'true') {
                     console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
                     user.starBalance -= totalCost;
                     console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
+                  } else if (process.env.TESTING === 'true') {
+                    console.log(`[ImageWorker] Testing mode: Skipping balance deduction for user ${userId}. Cost would be: ${totalCost}`);
                   }
                   
                   await user.save();
@@ -1699,6 +1701,36 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
     console.error('[Share] Error sharing meme:', error);
     await ctx.reply('❌ Error sharing meme. Please try again.');
   }
+});
+
+// 🧪 Testing mode admin commands
+bot.command('testingstatus', async (ctx) => {
+  const isTestMode = process.env.TESTING === 'true';
+  const statusEmoji = isTestMode ? '✅' : '❌';
+  const statusText = isTestMode ? 'ENABLED' : 'DISABLED';
+  
+  const message = `🧪 **Testing Mode Status**\n\n` +
+    `${statusEmoji} Testing Mode: **${statusText}**\n\n` +
+    `📝 **What this means:**\n` +
+    `• Credit checks: ${isTestMode ? 'SKIPPED' : 'ACTIVE'}\n` +
+    `• Balance deduction: ${isTestMode ? 'SKIPPED' : 'ACTIVE'}\n` +
+    `• Free generations: ${isTestMode ? 'UNLIMITED' : 'LIMITED'}\n\n` +
+    `${isTestMode ? '🎉 Perfect for beta testing!' : '💰 Production mode active'}`;
+  
+  await ctx.reply(message, { parse_mode: 'Markdown' });
+});
+
+bot.command('toggletesting', async (ctx) => {
+  // This is just informational - actual toggle requires environment variable change
+  await ctx.reply(
+    '🔧 **How to Toggle Testing Mode:**\n\n' +
+    '1. Update `.env` file:\n' +
+    '   • `TESTING=true` for testing mode\n' +
+    '   • `TESTING=false` for production mode\n\n' +
+    '2. Restart the bot service\n\n' +
+    'Use `/testingstatus` to check current status.',
+    { parse_mode: 'Markdown' }
+  );
 });
 
 connectDB();

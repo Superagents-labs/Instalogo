@@ -423,7 +423,8 @@ export function createLogoWizardScene(
       return;
     }
     const cost = !user.freeGenerationUsed ? 0 : 50; // 50 stars per logo
-    if (cost > 0 && user.starBalance < cost) {
+    // Skip credit check in testing mode
+    if (process.env.TESTING !== 'true' && cost > 0 && user.starBalance < cost) {
       await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
       return;
     }

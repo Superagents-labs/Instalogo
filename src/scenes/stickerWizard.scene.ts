@@ -314,8 +314,8 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
       totalCost = count * costPerSticker;
     }
     
-    // Check if user has enough stars again
-    if (totalCost > 0 && user.starBalance < totalCost) {
+    // Check if user has enough stars again (skip in testing mode)
+    if (process.env.TESTING !== 'true' && totalCost > 0 && user.starBalance < totalCost) {
       await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
       return ctx.scene.leave();
     }

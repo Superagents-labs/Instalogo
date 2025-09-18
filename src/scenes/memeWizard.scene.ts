@@ -376,7 +376,8 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
     }
     
     const cost = !user.freeGenerationUsed ? 0 : calculateMemeCost(quality);
-    if (cost > 0 && user.starBalance < cost) {
+    // Skip credit check in testing mode
+    if (process.env.TESTING !== 'true' && cost > 0 && user.starBalance < cost) {
       await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
       return ctx.scene.leave();
     }
