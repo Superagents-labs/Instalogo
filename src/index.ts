@@ -36,8 +36,15 @@ export async function sendMainMenu(ctx: BotContext) {
   if (ctx.dbUser) {
     balanceMsg = `\n\n*${ctx.i18n.t('welcome.star_balance')}:* ${ctx.dbUser.starBalance} ⭐`;
   }
+  
+  // Add beta testing notice if in testing mode
+  let betaNotice = '';
+  if (process.env.TESTING === 'true') {
+    betaNotice = `\n\n🧪 *BETA TESTING MODE*\n🎉 *All features are FREE during testing!*\n📝 Help us improve by sharing feedback\n\n`;
+  }
+  
   await ctx.reply(
-    `*${ctx.i18n.t('welcome.title')}*\n\n${ctx.i18n.t('welcome.what_to_do')}${balanceMsg}\n\n_${ctx.i18n.t('welcome.built_by')}_`,
+    `*${ctx.i18n.t('welcome.title')}*${betaNotice}\n${ctx.i18n.t('welcome.what_to_do')}${balanceMsg}\n\n_${ctx.i18n.t('welcome.built_by')}_`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -204,6 +211,19 @@ bot.start(async (ctx) => {
     } catch (error) {
       console.error('Error processing referral:', error);
     }
+  }
+  
+  // Add special beta testing welcome if in testing mode
+  if (process.env.TESTING === 'true') {
+    await ctx.reply(
+      `🧪 *Welcome to Instalogo Beta Testing!*\n\n` +
+      `🎉 You're part of our exclusive beta test group!\n` +
+      `✨ All features are completely FREE during testing\n` +
+      `📝 Your feedback helps us improve the bot\n` +
+      `🚀 Test everything - logos, memes, stickers!\n\n` +
+      `Thank you for being a beta tester! 🙏`,
+      { parse_mode: 'Markdown' }
+    );
   }
   
   // Force leave and clear any existing scene state
@@ -952,7 +972,11 @@ const startBot = async () => {
       + '�� Blockchain-ready\n'
       + '✨ SuperAgent Labs'
     );
-    await bot.telegram.setMyShortDescription('BrandForge Bot — AI Crypto Logo');
+    const shortDescription = process.env.TESTING === 'true'
+      ? '🧪 BETA - Instalogo Bot — FREE AI Logo Generator'
+      : 'BrandForge Bot — AI Crypto Logo';
+      
+    await bot.telegram.setMyShortDescription(shortDescription);
     
     // Check if we're in production with webhook URL
     const isProduction = process.env.NODE_ENV === 'production';
