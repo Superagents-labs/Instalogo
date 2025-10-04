@@ -1208,37 +1208,6 @@ const startBot = async () => {
             
             // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
             clearUserIntervals(userId);
-          } else if (name === 'edit-sticker') {
-            const { prompt } = job.data;
-            console.log(`[ImageWorker] Generating sticker with Leonardo AI using prompt: ${prompt}`);
-            
-            try {
-              // Generate sticker using FLUX instead of editing
-              const stickerUrls = await fluxService.generateStickers({
-                prompt: `${prompt}. Create a sticker with transparent background.`,
-                count: 1,
-                userId: userId,
-                sessionId: 'edit-sticker',
-                generationType: 'sticker'
-              });
-              
-              if (!stickerUrls || stickerUrls.length === 0) {
-                throw new Error('No stickers returned from Leonardo AI');
-              }
-              
-              // Download and send the generated sticker
-              const response = await axios.get(stickerUrls[0], { responseType: 'arraybuffer' });
-              const buffer = Buffer.from(response.data as ArrayBuffer);
-              
-              await bot.telegram.sendPhoto(chatId, { source: buffer }, { 
-                caption: 'Here is your generated sticker!' 
-              });
-              
-              console.log(`[ImageWorker] Completed job: ${job.id} (edit-sticker)`);
-            } catch (error) {
-              console.error('[ImageWorker] Error generating sticker with Leonardo AI:', error);
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error creating your sticker. Please try again.');
-            }
           }
         } catch (error) {
           console.error(`[ImageWorker] Error in job ${job.id}:`, error);

@@ -18,7 +18,6 @@
   "general": {
     "photo_received": "Photo received! (debug)",
     "please_upload": "Please upload a PNG image (512x512, <512KB) to use as your starter sticker!",
-    "please_describe": "Please provide a description of how you want to modify the image:", 
     "starter_pack_created": "Your starter sticker pack is created! [View it here]()",
     "processing_image": "Processing your image for sticker creation...",
     "image_queued": "Your image has been queued for editing! I will notify you when it's ready.",

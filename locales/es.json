@@ -18,7 +18,6 @@
   "general": {
     "photo_received": "¡Foto recibida! (debug)",
     "please_upload": "¡Por favor sube una imagen PNG (512x512, <512KB) para usar como sticker inicial!",
-    "please_describe": "Por favor proporciona una descripción de cómo quieres modificar la imagen:",
     "starter_pack_created": "¡Tu pack de stickers ha sido creado! [Ver aquí](https://t.me/addstickers/{{packName}})",
     "processing_image": "Procesando tu imagen para la creación de stickers...",
     "image_queued": "¡Tu imagen está en cola para edición! Te notificaré cuando esté lista.",

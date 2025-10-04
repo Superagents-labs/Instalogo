@@ -18,7 +18,6 @@
   "general": {
     "photo_received": "Photo reçue ! (debug)",
     "please_upload": "Veuillez télécharger une image PNG (512x512, <512KB) à utiliser comme sticker de démarrage !",
-    "please_describe": "Veuillez décrire comment vous souhaitez modifier l'image :",
     "starter_pack_created": "Votre pack de stickers de démarrage est créé ! [Voir ici](https://t.me/addstickers/{{packName}})",
     "processing_image": "Traitement de votre image pour la création de stickers...",
     "image_queued": "Votre image a été mise en file d'attente pour modification ! Je vous informerai quand elle sera prête.",

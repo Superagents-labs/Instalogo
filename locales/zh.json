@@ -18,7 +18,6 @@
   "general": {
     "photo_received": "已收到照片！(调试)",
     "please_upload": "请上传PNG图片(512x512, <512KB)作为您的初始贴纸！",
-    "please_describe": "请描述您想如何修改图片：",
     "starter_pack_created": "您的初始贴纸包已创建！[在此查看](https://t.me/addstickers/{{packName}})",
     "processing_image": "正在处理您的图片以创建贴纸...",
     "image_queued": "您的图片已加入编辑队列！我会在它准备好时通知您。",
