@@ -2,6 +2,7 @@
 import { Scenes } from 'telegraf';
 import { BotContext } from '../types';
 import { OpenAIService } from '../services/openai.service';
+import { FluxService } from '../services/flux.service';
 import sizeOf from 'image-size';
 import sharp from 'sharp';
 import createBackgroundRemoval from '@imgly/background-removal-node';
@@ -149,7 +150,7 @@ function logErrorWithRef(error: any) {
   return ref;
 }
 
-export function createStickerWizardScene(openaiService: OpenAIService): Scenes.WizardScene<BotContext> {
+export function createStickerWizardScene(openaiService: OpenAIService, fluxService: FluxService): Scenes.WizardScene<BotContext> {
   const scene = new Scenes.WizardScene<BotContext>(
     'stickerWizard',
     // Step 1: Logo upload or skip
@@ -212,6 +213,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         const num = parseInt(ctx.message.text);
         if (!isNaN(num) && num >= 1 && num <= 100) {
           count = num;
+          (ctx.session as any).stickerCount = count; // Persist to session
         } else {
           ctx.session.__retries++;
           if (ctx.session.__retries >= 3) {
@@ -222,6 +224,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
           return;
         }
       }
+      (ctx.session as any).stickerCount = count; // Persist even if default
       ctx.session.__retries = 0;
       
       // Display summary
@@ -245,13 +248,14 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         totalCost = count * costPerSticker;
       }
       
-      // Check if user has enough stars
-      if (totalCost > 0 && user.starBalance < totalCost) {
+      // Skip credit check in testing mode
+      if (process.env.TESTING !== 'true' && totalCost > 0 && user.starBalance < totalCost) {
         await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
         return ctx.scene.leave();
       }
       
       // Ask for confirmation
+      console.log(`[StickerWizard] summary ready for user=${ctx.from?.id}, count=${count}, totalCost=${totalCost}, testing=${process.env.TESTING}`);
       await ctx.reply(
         `${count} ${ctx.i18n.t('stickers.count')}. ${totalCost > 0 ? ctx.i18n.t('stickers.stars_deducted', { totalCost }) : ctx.i18n.t('stickers.free_generation')}`,
         {
@@ -268,6 +272,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
   
   // Add an enter handler to reset session state
   scene.enter(async (ctx) => {
+    console.log(`[StickerWizard] enter: user=${ctx.from?.id}`);
     // Reset all sticker-related session data
     const stickerKeys = [
       'stickerImageFileId', 'stickerImageSkipped', 'stickerStyle', 
@@ -285,6 +290,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
   
   // Confirm sticker generation
   scene.action('confirm_stickers', async (ctx) => {
+    console.log(`[StickerWizard] confirm_stickers: user=${ctx.from?.id}`);
     await ctx.answerCbQuery();
     const user = ctx.dbUser;
     if (!user) {
@@ -322,12 +328,9 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
     
     await ctx.reply(ctx.i18n.t('stickers.generating'));
     
-    // Prepare the prompt
-    let basePrompt = `Create a ${style} sticker`;
-    if (phrases.toLowerCase() !== 'none' && phrases.trim() !== '') {
-      basePrompt += ` with the text/phrases/emojis: ${phrases}`;
-    }
-    basePrompt += `. Make it suitable for a Telegram sticker pack. The sticker should be bold, colorful, eye-catching, and have a transparent background. Don't crop any important elements. Don't include text that is cut off. Make sure any text is easily readable.`;
+    // Build comprehensive sticker prompt using FLUX service
+    const session = ctx.session as any;
+    const comprehensivePrompt = fluxService.buildStickerPrompt(session);
     
     try {
       // Prepare cost message for the queue message
@@ -336,8 +339,9 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         : ctx.i18n.t('stickers.free_generation');
       
       // Queue all the stickers for generation with timeout
+      console.log(`[StickerWizard] queueing generate-sticker: user=${ctx.from?.id}, count=${count}, freeGenerationUsed=${freeGenerationUsed}, cost=${totalCost}`);
       await imageQueue.add('generate-sticker', {
-        prompt: basePrompt,
+        prompt: comprehensivePrompt,
         userId: ctx.from?.id,
         chatId: ctx.chat?.id,
         count,

@@ -8,6 +8,26 @@ export interface IImageGeneration extends Document {
   timestamp: Date;
   imageUrl: string;
   localPath?: string;
+  
+  // Seed for consistent generation
+  seed?: number;
+  
+  // New fields for logo variants
+  originalPrompt?: string;
+  selectedImageIndex?: number;
+  variants?: {
+    standard?: string;
+    transparent?: string;
+    white?: string;
+    icon?: string;
+  };
+  generationMetadata?: {
+    brandName?: string;
+    sessionId?: string;
+    isVariant?: boolean;
+    parentGenerationId?: string;
+    originalSeed?: number;
+  };
 }
 
 const ImageGenerationSchema: Schema = new Schema({
@@ -18,6 +38,21 @@ const ImageGenerationSchema: Schema = new Schema({
   timestamp: { type: Date, default: Date.now },
   imageUrl: { type: String, required: true },
   localPath: { type: String },
+  
+  // Seed for consistent generation
+  seed: { type: Number },
+  
+  // New fields for logo variants
+  originalPrompt: { type: String },
+  selectedImageIndex: { type: Number },
+  variants: {
+    type: Map,
+    of: String,
+  },
+  generationMetadata: {
+    type: Object,
+    of: String,
+  },
 });
 
-export const ImageGeneration = mongoose.model<IImageGeneration>('ImageGeneration', ImageGenerationSchema); 
+export const ImageGeneration = mongoose.model<IImageGeneration>('ImageGeneration', ImageGenerationSchema);

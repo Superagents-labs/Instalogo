@@ -8,6 +8,7 @@ import { createLogoWizardScene } from './logoWizard.scene';
 import { createMemeWizardScene } from './memeWizard.scene';
 import { createStickerWizardScene } from './stickerWizard.scene';
 import { OpenAIService } from '../services/openai.service';
+import { FluxService } from '../services/flux.service';
 import { MongoDBService } from '../services/mongodb.service';
 import { StorageService } from '../services/storage.service';
 import { ensureWizardReset } from '../middleware/scene.middleware';
@@ -17,6 +18,7 @@ import { ensureWizardReset } from '../middleware/scene.middleware';
  */
 export function createScenes(
   openaiService: OpenAIService,
+  fluxService: FluxService,
   mongodbService: MongoDBService,
   storageService: StorageService
 ) {
@@ -26,7 +28,7 @@ export function createScenes(
   const styleScene = createStyleScene(openaiService, mongodbService, storageService);
   const logoWizardScene = createLogoWizardScene(openaiService, storageService);
   const memeWizardScene = createMemeWizardScene(openaiService, mongodbService);
-  const stickerWizardScene = createStickerWizardScene(openaiService);
+  const stickerWizardScene = createStickerWizardScene(openaiService, fluxService);
   
   // Apply reset function to wizard scenes
   ensureWizardReset(logoWizardScene);

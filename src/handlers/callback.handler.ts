@@ -66,9 +66,18 @@ export function setupCallbackHandlers(
     await ctx.scene.enter('logoWizard');
   });
 
+  // Handle entering meme wizard scene
+  bot.action('generate_memes', async (ctx: BotContext) => {
+    await ctx.answerCbQuery();
+    console.log(`[User Action] generate_memes clicked by user=${ctx.from?.id}`);
+    await clearSessionForSceneSwitch(ctx);
+    await ctx.scene.enter('memeWizard');
+  });
+
   // Handle entering sticker wizard scene
   bot.action('generate_stickers', async (ctx: BotContext) => {
     await ctx.answerCbQuery();
+    console.log(`[User Action] generate_stickers clicked by user=${ctx.from?.id}`);
     await clearSessionForSceneSwitch(ctx);
     await ctx.scene.enter('stickerWizard');
   });

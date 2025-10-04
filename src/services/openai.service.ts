@@ -1,188 +1,331 @@
 import OpenAI from 'openai';
 import { SessionData } from '../types';
-import { Readable } from 'stream';
-import { FluxService } from './flux.service';
-
+import { retryOpenAICall, handleImageGenerationError } from '../utils/retry';
 
 /**
- * Enhanced OpenAI Service with Flux AI Integration
- * Now powered by FLUX AI for superior logo generation
+ * Token cost tracking interface
+ */
+interface TokenCosts {
+  textInputTokens: number;
+  imageInputTokens: number;
+  imageOutputTokens: number;
+  totalCost: number;
+}
+
+/**
+ * Enhanced OpenAI Service with gpt-image-1 Integration
+ * Now powered by OpenAI gpt-image-1 for superior logo generation
  */
 export class OpenAIService {
   private client: OpenAI;
-  private fluxService: FluxService;
-  private useFlux: boolean = true;  // Always use FLUX for image generation
+  
+  // OpenAI pricing per token (as of current pricing)
+  private readonly PRICING = {
+    TEXT_INPUT: 0.000005,    // $5.00 per 1M tokens = $0.000005 per token
+    IMAGE_INPUT: 0.00001,    // $10.00 per 1M tokens = $0.00001 per token  
+    IMAGE_OUTPUT: 0.00004    // $40.00 per 1M tokens = $0.00004 per token
+  };
 
   /**
-   * Initialize AI services with FLUX as primary image generator
+   * Initialize AI services with OpenAI gpt-image-1 as primary image generator
    */
   constructor() {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY is required for OpenAI service');
+    }
+    
     this.client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
     
-    this.fluxService = new FluxService();
-    
-    console.log('[ENHANCED] OpenAI Service now powered by FLUX AI for superior logo generation!');
+    console.log('✅ OpenAI Service initialized for image generation with gpt-image-1');
   }
 
   /**
-   * Build a prompt for logo generation - Enhanced with FLUX industry standards
+   * Calculate token costs based on usage data
+   */
+  private calculateTokenCosts(usage: any): TokenCosts {
+    // Handle different response formats
+    const inputTokens = usage?.input_tokens || usage?.prompt_tokens || 0;
+    const outputTokens = usage?.output_tokens || usage?.completion_tokens || 0;
+    
+    // For image generation, we need to determine token types
+    // Based on the actual response structure, we'll treat:
+    // - input_tokens as text input (prompt)
+    // - output_tokens as image output tokens (generated images)
+    const textInputTokens = inputTokens;
+    const imageInputTokens = 0; // No image input for text-to-image generation
+    const imageOutputTokens = outputTokens;
+    
+    const textInputCost = textInputTokens * this.PRICING.TEXT_INPUT;
+    const imageInputCost = imageInputTokens * this.PRICING.IMAGE_INPUT;
+    const imageOutputCost = imageOutputTokens * this.PRICING.IMAGE_OUTPUT;
+    
+    const totalCost = textInputCost + imageInputCost + imageOutputCost;
+    
+    return {
+      textInputTokens,
+      imageInputTokens,
+      imageOutputTokens,
+      totalCost
+    };
+  }
+
+  /**
+   * Log token usage and costs
+   */
+  private logTokenUsage(usage: any, operation: string): void {
+    try {
+      if (!usage) {
+        console.log(`[OpenAI Cost] ${operation}: No usage data available`);
+        return;
+      }
+
+      const costs = this.calculateTokenCosts(usage);
+      
+      console.log(`💰 [OpenAI Cost] ${operation}:`);
+      console.log(`   Text Input: ${costs.textInputTokens} tokens = $${(costs.textInputTokens * this.PRICING.TEXT_INPUT).toFixed(6)}`);
+      console.log(`   Image Input: ${costs.imageInputTokens} tokens = $${(costs.imageInputTokens * this.PRICING.IMAGE_INPUT).toFixed(6)}`);
+      console.log(`   Image Output: ${costs.imageOutputTokens} tokens = $${(costs.imageOutputTokens * this.PRICING.IMAGE_OUTPUT).toFixed(6)}`);
+      console.log(`   💵 Total Cost: $${costs.totalCost.toFixed(6)}`);
+    } catch (error) {
+      console.error(`[OpenAI Cost] ${operation} - Error calculating costs:`, error);
+    }
+  }
+
+  /**
+   * Build comprehensive prompt with all user input for GPT Image
    */
   public buildPrompt(session: SessionData): string {
-    if (this.useFlux) {
-      console.log('[ENHANCED] Building industry-standard prompt with FLUX AI');
-      return this.fluxService.buildPrompt(session);
-    }
+    console.log('[ENHANCED] Building comprehensive prompt with OpenAI gpt-image-1 - capturing ALL user input');
     
-    // Fallback to original prompt structure
-    const parts = [
-      session.name ? `Brand Name: ${session.name}` : '',
-      session.tagline ? `Tagline: ${session.tagline}` : '',
-      session.mission ? `Mission/Industry: ${session.mission}` : '',
+    const iconPrompt = this.buildIconSpecificPrompt(session);
+    
+    const brandContext = [
+      '=== BRAND IDENTITY CONTEXT ===',
+      session.name ? `Brand Name: "${session.name}"` : '',
+      session.tagline && session.tagline !== 'skip' ? `Tagline/Slogan: "${session.tagline}"` : '',
+      session.mission ? `Business Mission/Industry: ${session.mission}` : '',
       session.audience ? `Target Audience: ${session.audience}` : '',
-      session.vibe ? `Brand Vibe: ${session.vibe}` : '',
-      session.stylePreferences?.length ? `Style Preferences: ${session.stylePreferences.join(', ')}` : '',
-      session.colorPreferences ? `Color Preferences: ${session.colorPreferences}` : '',
-      session.typography ? `Typography: ${session.typography}` : '',
-      session.iconIdea ? `Icon Ideas: ${session.iconIdea}` : '',
-      session.inspiration ? `Inspiration: ${session.inspiration}` : '',
-      session.finalNotes ? `Additional Notes: ${session.finalNotes}` : '',
-      '',
-      'Please generate a professional, industry-standard logo that:',
-      '1. Reflects the brand identity and values described above',
-      '2. Is memorable, unique, and stands out from competitors',
-      '3. Works well at different sizes (scalable vector-style design)',
-      '4. Uses appropriate colors that convey the right emotions and industry standards',
-      '5. Incorporates typography that matches the brand personality',
-      '6. Be scalable, work on both light and dark backgrounds, and be suitable for both digital and print use',
-      '7. Follow professional industry standards for logo design with appropriate contrast, legibility, and recognition',
-      '8. Demonstrate clear visual hierarchy and proper spacing'
+      session.vibe ? `Brand Personality/Vibe: ${session.vibe}` : '',
+      ''
     ].filter(Boolean).join('\n');
 
-    return parts;
+    const designPreferences = [
+      '=== DESIGN PREFERENCES ===',
+      session.stylePreferences?.length ? `Visual Style: ${session.stylePreferences.join(', ')}` : '',
+      session.colorPreferences ? `Color Palette: ${session.colorPreferences}` : '',
+      session.typography ? `Typography Style: ${session.typography}` : '',
+      iconPrompt,
+      ''
+    ].filter(Boolean).join('\n');
+
+    const inspirationRequirements = [
+      '=== INSPIRATION & REQUIREMENTS ===',
+      session.inspiration ? `Design Inspiration: ${session.inspiration}` : '',
+      session.finalNotes ? `Special Requirements: ${session.finalNotes}` : '',
+      ''
+    ].filter(Boolean).join('\n');
+
+    const technicalRequirements = [
+      '=== TECHNICAL REQUIREMENTS ===',
+      'Format: High-quality PNG with transparent background',
+      'Scalability: Vector-style design that works at all sizes',
+      'Compatibility: Works on both light and dark backgrounds',
+      'Usage: Suitable for digital and print applications',
+      'Quality: Professional industry standards',
+      ''
+    ].join('\n');
+
+    const designObjectives = [
+      '=== DESIGN OBJECTIVES ===',
+      '1. Create a memorable and unique visual identity that stands out from competitors',
+      '2. Ensure the logo reflects the brand identity, values, and personality described above',
+      '3. Design with clear visual hierarchy and proper spacing for optimal readability',
+      '4. Use colors and typography that convey the right emotions and industry standards',
+      '5. Ensure the logo is instantly recognizable and works well at different sizes',
+      '6. Follow professional design principles with appropriate contrast and legibility',
+      '7. Create a timeless design that will remain relevant and effective over time',
+      ''
+    ].join('\n');
+
+    const comprehensivePrompt = [
+      brandContext,
+      designPreferences,
+      inspirationRequirements,
+      technicalRequirements,
+      designObjectives,
+      '=== FINAL INSTRUCTION ===',
+      'Generate a professional, industry-standard logo that incorporates ALL the above context, preferences, and requirements. The logo should be a cohesive visual representation of the brand that works perfectly for all intended uses.'
+    ].join('\n');
+
+    return comprehensivePrompt;
   }
 
   /**
-   * Generate logo images using OpenAI DALL-E 3
+   * Build icon-specific prompt to make icons more distinct
+   */
+  private buildIconSpecificPrompt(session: SessionData): string {
+    if (!session.iconIdeas || session.iconIdeas.toLowerCase() === 'skip') {
+      return 'Icon Focus: No specific icon requirements - create a balanced logo design';
+    }
+
+    const iconArray = session.iconIdeas.toLowerCase().split(', ');
+    const brandName = session.name || 'the brand';
+    const style = session.stylePreferences?.[0] || 'modern';
+
+    // Enhanced icon-specific prompts based on icon categories
+    const iconPrompts = {
+      tech: [
+        `Create a distinctive tech-focused icon featuring ${iconArray.join(' and ')} elements. Make the icon prominent and recognizable, incorporating modern tech aesthetics like geometric shapes, circuit patterns, or digital elements.`,
+        `Design a tech-forward icon that prominently showcases ${iconArray.join(' and ')} with clean lines, digital-inspired forms, and contemporary tech styling.`
+      ],
+      nature: [
+        `Create a nature-inspired icon featuring ${iconArray.join(' and ')} elements. Make the icon organic and distinctive, incorporating natural forms, flowing lines, and earthy aesthetics.`,
+        `Design a nature-focused icon that prominently displays ${iconArray.join(' and ')} with organic shapes, natural textures, and environmental styling.`
+      ],
+      business: [
+        `Create a professional business icon featuring ${iconArray.join(' and ')} elements. Make the icon authoritative and distinctive, incorporating corporate aesthetics, clean geometry, and professional styling.`,
+        `Design a business-forward icon that prominently showcases ${iconArray.join(' and ')} with professional forms, corporate styling, and authoritative presence.`
+      ],
+      abstract: [
+        `Create an abstract icon featuring ${iconArray.join(' and ')} elements. Make the icon distinctive and memorable, incorporating creative forms, artistic styling, and unique visual elements.`,
+        `Design an abstract-focused icon that prominently displays ${iconArray.join(' and ')} with creative forms, artistic elements, and distinctive styling.`
+      ]
+    };
+
+    // Determine category based on style preferences
+    let category = 'abstract';
+    if (style.includes('tech') || style.includes('modern') || style.includes('minimal')) {
+      category = 'tech';
+    } else if (style.includes('nature') || style.includes('organic') || style.includes('natural')) {
+      category = 'nature';
+    } else if (style.includes('professional') || style.includes('corporate') || style.includes('business')) {
+      category = 'business';
+    }
+
+    const prompts = iconPrompts[category as keyof typeof iconPrompts];
+    const selectedPrompt = prompts[Math.floor(Math.random() * prompts.length)];
+
+    return `Icon Focus: ${selectedPrompt}`;
+  }
+
+  /**
+   * Generate logo images using OpenAI gpt-image-1 with retry logic
    */
   public async generateLogoImages(params: { prompt: string; userId?: number; userBalance?: number; freeGeneration?: boolean; sessionId?: string }): Promise<string[]> {
     const startTime = Date.now();
-    let imageUrls: string[] = [];
-    let error: string | undefined;
+    console.log('🎨 Generating logo images with OpenAI...');
 
-    try {
-      console.log('Generating logo images with OpenAI...');
+    // Use retry mechanism for the API call
+    const retryResult = await retryOpenAICall(
+      async () => {
+        
+        const response = await this.client.responses.create({
+          model: 'gpt-4.1-mini',
+          input: params.prompt,
+          tools: [{ type: 'image_generation' }]
+        });
 
-      const response = await this.client.images.generate({
-        model: 'dall-e-3',
-        prompt: params.prompt,
-        n: 1, // DALL-E 3 only supports n=1
-        size: '1024x1024',
-        response_format: 'url'
-      });
+        // Check for usage information in the response and log costs
+        if (response.usage) {
+          this.logTokenUsage(response.usage, 'Logo Generation');
+        }
+        
+        const imageData = response.output
+          .filter((output: any) => output.type === 'image_generation_call')
+          .map((output: any) => output.result);
+        
+        if (imageData.length === 0) {
+          throw new Error('No image generation calls returned from OpenAI API');
+        }
+        
+        const imageUrls = imageData.map((base64Data: string) => `data:image/png;base64,${base64Data}`);
+        
+        return imageUrls;
+      },
+      `Logo generation for user ${params.userId || 'unknown'}`
+    );
 
-      imageUrls = response.data?.map(img => img.url!) || [];
-      console.log(`Generated ${imageUrls.length} logo images successfully`);
-      
-      return imageUrls;
-    } catch (err: any) {
-      error = err.message || 'Unknown error';
-      console.error('Error generating logo images:', err);
-      throw new Error('Failed to generate logo images. Please try again later.');
-    } finally {
-      // Log the API call
-      if (params.userId) {
-        console.log(`[OpenAI] Logo generation completed for user ${params.userId}`);
-      }
+    if (!retryResult.success) {
+      const errorMessage = handleImageGenerationError(retryResult.error, 'Logo generation');
+      console.error(`[OpenAI] Logo generation failed after ${retryResult.attempts} attempts:`, retryResult.error);
+      throw new Error(errorMessage);
     }
+
+    const imageUrls = retryResult.data!;
+    const totalTime = Date.now() - startTime;
+    
+    console.log(`✅ Generated ${imageUrls.length} logo images successfully in ${totalTime}ms`);
+    
+    return imageUrls;
   }
 
   /**
-   * Generate high-resolution logo
+   * Generate image using OpenAI with image context (for icon extraction) with retry logic
    */
-  public async generateHighResolutionLogo(prompt: string, userId?: number, userBalance?: number, sessionId?: string): Promise<string> {
-    let imageUrl: string | undefined;
-    let error: string | undefined;
+  public async generateImageWithContext(options: {
+    prompt: string;
+    imageDataUrl: string;
+    userId?: number;
+    sessionId?: string;
+    generationType?: string;
+  }): Promise<any> {
+    console.log('🖼️ Generating image with context using OpenAI...');
 
-    try {
-      console.log('Generating high-resolution logo...');
+    // Use retry mechanism for the API call
+    const retryResult = await retryOpenAICall(
+      async () => {
 
-      const response = await this.client.images.generate({
-        model: 'dall-e-3',
-        prompt: prompt,
-        n: 1,
-        size: '1024x1024',
-        response_format: 'url'
-      });
-
-      imageUrl = response.data?.[0]?.url;
-      if (!imageUrl) {
-        throw new Error('No image URL returned from OpenAI');
-      }
-
-      console.log('High-resolution logo generated successfully');
-      return imageUrl;
-    } catch (err: any) {
-      error = err.message || 'Unknown error';
-      console.error('Error generating high-resolution logo:', err);
-      throw new Error('Failed to generate high-resolution logo. Please try again later.');
-    } finally {
-      // Log the API call
-      if (userId) {
-        console.log(`[OpenAI] High-res logo generation completed for user ${userId}`);
-      }
-    }
-  }
-
-  /**
-   * Generate meme text suggestions using GPT-4
-   */
-  public async generateMemeText(prompt: string, userId?: number, userBalance?: number, sessionId?: string): Promise<string[]> {
-    let textResponse: string[] = [];
-    let error: string | undefined;
-    let inputTokens = 0;
-    let outputTokens = 0;
-
-    try {
-      console.log('Generating meme text suggestions...');
-
-      const response = await this.client.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a creative meme text generator. Generate catchy, funny, and viral-worthy text for memes. Be creative and engaging.'
-          },
-          {
+        // Use Responses API with image input as per documentation
+        const response = await this.client.responses.create({
+          model: 'gpt-4.1-mini',
+          input: [{
             role: 'user',
-            content: prompt
-          }
-        ],
-        max_tokens: 100,
-        temperature: 0.9
-      });
+            content: [
+              { type: 'input_text', text: options.prompt },
+              {
+                type: 'input_image',
+                image_url: options.imageDataUrl,
+                detail: 'high'
+              },
+            ],
+          }],
+          tools: [{ type: 'image_generation' }]
+        });
 
-      const content = response.choices[0]?.message?.content;
-      if (content) {
-        textResponse = content.split('\n').filter(line => line.trim());
-      }
+        // Check for usage information in the response and log costs
+        if (response.usage) {
+          this.logTokenUsage(response.usage, 'Image Generation with Context');
+        }
 
-      inputTokens = response.usage?.prompt_tokens || 0;
-      outputTokens = response.usage?.completion_tokens || 0;
+        // Extract image data from Responses API format (as per documentation)
+        const imageData = response.output
+          .filter((output: any) => output.type === 'image_generation_call')
+          .map((output: any) => output.result);
+        
+        if (imageData.length === 0) {
+          throw new Error('No image generation calls returned from OpenAI API');
+        }
+        
+        // Return base64 data as data URL
+        const result = `data:image/png;base64,${imageData[0]}`;
+        
+        return result;
+      },
+      `Image generation with context for user ${options.userId || 'unknown'}`
+    );
 
-      console.log(`Generated ${textResponse.length} meme text suggestions`);
-      return textResponse;
-    } catch (err: any) {
-      error = err.message || 'Unknown error';
-      console.error('Error generating meme text:', err);
-      return ['HODL!'];
-    } finally {
-      // Log the text generation call
-      if (userId) {
-        console.log(`[OpenAI] Text generation completed for user ${userId}`);
-      }
+    if (!retryResult.success) {
+      const errorMessage = handleImageGenerationError(retryResult.error, 'Image generation with context');
+      console.error(`[OpenAI] Image generation with context failed after ${retryResult.attempts} attempts:`, retryResult.error);
+      throw new Error(errorMessage);
     }
+
+    const result = retryResult.data!;
+    console.log(`✅ Image generated successfully with context`);
+    
+    return result;
   }
 
   /**
@@ -192,153 +335,46 @@ export class OpenAIService {
     prompt: string;
     image?: Buffer;
     model?: string;
-    size?: string;
+    size?: 'auto' | '1024x1024' | '1536x1024' | '1024x1536' | '256x256' | '512x512' | '1792x1024' | '1024x1792';
     response_format?: 'url' | 'b64_json';
+    quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'auto';
+    style?: 'vivid' | 'natural';
+    user?: string;
     userId?: number;
     userBalance?: number;
     sessionId?: string;
     generationType?: string;
   }): Promise<any> {
-    let result: any;
-    let error: string | undefined;
-
     try {
-      console.log('Generating image with enhanced options...');
+      console.log('Generating image with OpenAI...');
 
-      if (options.image) {
-        // Image editing/variation not supported in this simplified version
-        throw new Error('Image editing not supported in this version');
-      } else {
-        // Generate new image
         const response = await this.client.images.generate({
           model: options.model || 'dall-e-3',
           prompt: options.prompt,
-          n: 1,
-          size: options.size as any || '1024x1024',
-          response_format: options.response_format || 'url'
-        });
-
-        result = response;
-      }
-
-      console.log('Image generated successfully');
-      return result;
-    } catch (err: any) {
-      error = err.message || 'Unknown error';
-      console.error('Error generating image:', err);
-      throw new Error('Failed to generate image. Please try again later.');
-    } finally {
-      // Log the API call
-      if (options.userId) {
-        console.log(`[OpenAI] Image generation completed for user ${options.userId}`);
-      }
-    }
-  }
-
-  /**
-   * Generate images with OpenAI DALL-E
-   */
-  public async generateImageWithOpenAI(params: {
-    prompt: string;
-    n?: number;
-    size?: string;
-    model?: string;
-    userId?: number;
-    userBalance?: number;
-    sessionId?: string;
-    generationType?: string;
-    freeGeneration?: boolean;
-  }): Promise<string[]> {
-    let imageB64s: string[] = [];
-    let error: string | undefined;
-
-    try {
-      console.log('Generating images with Flux AI...');
-
-      // Generate images using Flux AI
-      const imageUrls = await this.fluxService.generateImages({
-        prompt: params.prompt,
-        userId: params.userId?.toString(),
-        sessionId: params.sessionId,
-        numImages: params.n || 4
+        size: options.size || '1024x1024',
+        quality: options.quality || 'standard',
+        style: options.style || 'vivid',
+        response_format: options.response_format || 'url',
+        user: options.user
       });
 
-      // Convert URLs to base64
-      imageB64s = await Promise.all(
-        imageUrls.map(async (url) => {
-          try {
-            const response = await fetch(url);
-            const arrayBuffer = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            return buffer.toString('base64');
-          } catch (fetchError) {
-            console.error('Error converting image to base64:', fetchError);
-            return ''; // Return empty string for failed conversions
-          }
-        })
-      );
-
-      // Filter out empty strings
-      imageB64s = imageB64s.filter(b64 => b64.length > 0);
-      
-      console.log(`Generated ${imageB64s.length} images successfully with Flux AI`);
-      
-      return imageB64s;
-    } catch (err: any) {
-      error = err.message || 'Unknown error';
-      console.error('Error generating images:', err);
-      throw new Error('Failed to generate images. Please try again later.');
-    } finally {
-      // Log the API call
-      if (params.userId) {
-        console.log(`[Flux AI] Image generation completed for user ${params.userId}`);
+      // Log token usage and costs if available
+      if (response.usage) {
+        this.logTokenUsage(response.usage, 'Image Generation');
       }
+
+      if (options.response_format === 'b64_json') {
+        // Return base64 data as data URL
+        const base64Data = response.data[0].b64_json;
+        return `data:image/png;base64,${base64Data}`;
+      } else {
+        // Return URL
+        return response.data[0].url || '';
+      }
+    } catch (error) {
+      console.error('Error generating image:', error);
+      throw error;
     }
   }
 
-  /**
-   * Edit image for sticker creation
-   */
-  public async editImageForSticker(options: {
-    image: Buffer;
-    prompt: string;
-    userId?: number;
-    userBalance?: number;
-    sessionId?: string;
-  }): Promise<string> {
-    let result: string;
-    let error: string | undefined;
-
-    try {
-      console.log('Editing image for sticker...');
-
-      // Convert buffer to file-like object for OpenAI
-      const imageFile = new Blob([new Uint8Array(options.image)], { type: 'image/png' });
-
-      const response = await this.client.images.edit({
-        image: imageFile as any,
-        prompt: options.prompt,
-        n: 1,
-        size: '512x512',
-        response_format: 'b64_json'
-      });
-
-      result = response.data?.[0]?.b64_json!;
-      if (!result) {
-        throw new Error('No image data returned from OpenAI');
-      }
-
-      console.log('Image edited successfully for sticker');
-      return result;
-    } catch (err: any) {
-      error = err.message || 'Unknown error';
-      console.error('Error editing image for sticker:', err);
-      throw new Error('Failed to edit image for sticker. Please try again later.');
-    } finally {
-      // Log the API call
-      if (options.userId) {
-        console.log(`[OpenAI] Image editing completed for user ${options.userId}`);
-      }
-    }
-  }
 } 

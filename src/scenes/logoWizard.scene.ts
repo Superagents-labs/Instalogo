@@ -29,7 +29,7 @@ const typographyOptions = [
   'Surprise me'
 ];
 
-const colorOptions = ['Blue tones', 'Red tones', 'Green tones', 'Black & White', 'Neon colors', 'Pastel colors', 'Earth tones', 'Custom colors'];
+const colorOptions = ['White text', 'Black text', 'Blue text', 'Red text', 'Green text', 'Gold text', 'Silver text', 'Custom text color'];
 const vibeOptions = ['Playful', 'Luxury', 'Tech-savvy', 'Trustworthy', 'Creative', 'Eco-friendly', 'Energetic', 'Professional', 'Other (custom)'];
 const industryOptions = ['Technology', 'Finance', 'Healthcare', 'Education', 'Retail', 'Food & Beverage', 'Entertainment', 'Real Estate', 'Other (custom)'];
 const audienceOptions = ['Young adults', 'Professionals', 'Families', 'Business clients', 'Students', 'Luxury market', 'Global audience', 'Other (custom)'];
@@ -315,7 +315,7 @@ export function createLogoWizardScene(
     }
     
     if (session.colorPreferences && session.colorPreferences.length > 0) {
-      summary += `🎨 Colors: ${Array.isArray(session.colorPreferences) ? session.colorPreferences.join(', ') : session.colorPreferences}\n`;
+      summary += `🎨 Text Colors: ${Array.isArray(session.colorPreferences) ? session.colorPreferences.join(', ') : session.colorPreferences}\n`;
     }
     
     if (session.typography && session.typography.length > 0) {
@@ -453,7 +453,16 @@ export function createLogoWizardScene(
   });
 
   scene.leave(async (ctx) => {
-    if ((ctx.session as any).name) {
+    // Only generate logos if leaving from the confirm action
+    // Don't generate if user already selected a logo or exited the scene
+    const shouldGenerate = (ctx.session as any).name && 
+                           (ctx.session as any).__step === 'confirm' &&
+                           !(ctx.session as any).__logoAlreadyGenerated;
+    
+    if (shouldGenerate) {
+      // Mark that we're generating to prevent duplicate generations
+      (ctx.session as any).__logoAlreadyGenerated = true;
+      
       await ctx.reply(ctx.i18n.t('logo.generating_based_on'));
       try {
         // Add BullMQ job timeout (5 minutes) - using basic prompts
@@ -480,8 +489,10 @@ export function createLogoWizardScene(
         if (ctx.from?.id) {
           addUserInterval(ctx.from.id, intervalId);
         }
-        const costMsg = !ctx.dbUser?.freeGenerationUsed ? ctx.i18n.t('stickers.free_generation') : ctx.i18n.t('stars.stars_deducted', { totalCost: 50 });
-        await ctx.reply(ctx.i18n.t('logo.request_queued', { costMessage: costMsg }));
+        const cost = !ctx.dbUser?.freeGenerationUsed ? 0 : 50;
+        const costMsg = cost > 0 ? `${cost} stars will be deducted from your balance.` : ctx.i18n.t('logo.free_generation');
+        const queuedMsg = ctx.i18n.t('logo.request_queued').replace('{{costMessage}}', costMsg);
+        await ctx.reply(queuedMsg);
       } catch (error) {
         const ref = logErrorWithRef(error);
         await ctx.reply(ctx.i18n.t('errors.generation_failed') + ` (Ref: ${ref})`);

@@ -81,7 +81,9 @@
     "color": "Color",
     "generate_meme": "Generar Meme 😂",
     "generating": "Generando tu meme ahora...",
-    "request_queued": "Tu solicitud de generación de meme está en cola. {{costMessage}} Serás notificado cuando comience a procesarse."
+    "request_queued": "Tu solicitud de generación de meme está en cola. {{costMessage}} Serás notificado cuando comience a procesarse.",
+    "free_generation": "Se utilizará tu generación gratuita.",
+    "stars_deducted": "Se deducirán {{totalCost}} estrellas de tu balance."
   },
   "logo": {
     "brand_name": "¿Cuál es el nombre de tu marca o proyecto? (Ortografía y puntuación exactas)",
@@ -101,6 +103,8 @@
     "generating": "¡Genial! Generando tus conceptos de logo ahora...",
     "generating_based_on": "Generando tus conceptos de logo basados en tus respuestas...",
     "request_queued": "Tu solicitud de generación de logo está en cola. {{costMessage}} Serás notificado cuando comience a procesarse.",
+    "free_generation": "Se utilizará tu generación gratuita.",
+    "stars_deducted": "Se deducirán {{totalCost}} estrellas de tu balance.",
     "please_answer_text": "Por favor, responde usando texto.",
     "first_tell_name": "Por favor, primero dime el nombre de tu negocio.",
     "whats_business_name": "🎨 ¡Genial! ¿Cuál es el nombre de tu negocio?",

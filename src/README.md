@@ -1,49 +1,49 @@
-# Instalogo Bot - Source Code Documentation
+# Instalogo Bot - AI-Powered Logo Generation
 
-This directory contains the TypeScript source code for the Instalogo Telegram bot that generates logos, memes, and stickers using Flux AI through the Replicate API.
+A Telegram bot that generates professional logos using OpenAI's gpt-image-1 model with comprehensive user input capture and intelligent prompt engineering.
 
 ## Architecture Overview
 
-The bot follows a modular, service-oriented architecture with clear separation of concerns:
-
 ```
 src/
-├── index.ts                    # Main bot entry point and configuration
-├── commands/                   # Bot command handlers
-│   └── language.ts            # Language selection command
-├── db/                        # Database configuration
-│   └── mongoose.ts            # MongoDB connection setup
-├── handlers/                  # Event and callback handlers
-│   └── callback.handler.ts   # Inline keyboard callback handling
-├── middleware/                # Custom middleware
-│   ├── i18n.middleware.ts     # Internationalization middleware
-│   ├── scene.middleware.ts    # Scene management middleware
-│   └── userLoader.ts          # User data loading middleware
-├── models/                    # MongoDB data models
-│   ├── ImageGeneration.ts     # Generated image metadata
-│   ├── User.ts               # User profiles and balances
-│   ├── UserFeedback.ts       # User interaction tracking
-│   └── UserImages.ts         # Image storage references
-├── scenes/                    # Conversation flow scenes (wizards)
-│   ├── index.ts              # Scene registration and exports
-│   ├── enhanced-logoWizard.scene.ts  # Enhanced logo generation flow
-│   ├── industry.scene.ts     # Industry selection scene
-│   ├── logoWizard.scene.ts   # Basic logo generation wizard
-│   ├── memeWizard.scene.ts   # Meme generation flow
-│   ├── name.scene.ts         # Brand name collection
-│   ├── stickerWizard.scene.ts # Sticker pack creation
-│   └── style.scene.ts        # Style preference collection
-├── services/                  # Core business logic services
-│   ├── flux.service.ts       # Flux AI integration via Replicate
-│   ├── mongodb.service.ts    # Database operations
-│   ├── openai.service.ts     # OpenAI text generation (optional)
-│   └── storage.service.ts    # S3-compatible image storage
-├── types/                    # TypeScript type definitions
-│   └── index.ts             # Shared interfaces and types
-└── utils/                   # Utility functions
-    ├── escapeMarkdownV2.ts  # Telegram markdown escaping
-    ├── imageQueue.ts        # Background job processing
-    ├── stickerUtils.ts      # Sticker creation utilities
+├── commands/                  # Bot command handlers
+│   └── language.ts           # Language selection command
+├── db/                       # Database configuration
+│   └── mongoose.ts           # MongoDB connection setup
+├── handlers/                 # Event handlers
+│   └── callback.handler.ts   # Callback query handlers
+├── index.ts                  # Main bot entry point
+├── middleware/               # Bot middleware
+│   ├── i18n.middleware.ts   # Internationalization
+│   ├── scene.middleware.ts  # Scene management
+│   └── userLoader.ts        # User data loading
+├── models/                   # Database models
+│   ├── ImageGeneration.ts   # Image generation records
+│   ├── User.ts              # User data model
+│   ├── UserFeedback.ts      # User feedback model
+│   └── UserImages.ts        # User image storage
+├── scenes/                   # Conversation flow scenes (wizards)
+│   ├── index.ts             # Scene registration and exports
+│   ├── industry.scene.ts    # Industry selection scene
+│   ├── logoWizard.scene.ts  # Logo generation wizard
+│   ├── memeWizard.scene.ts  # Meme generation wizard
+│   ├── name.scene.ts        # Brand name collection
+│   ├── stickerWizard.scene.ts # Sticker generation wizard
+│   └── style.scene.ts       # Style preference collection
+├── services/                 # Core business logic services
+│   ├── completeAssetGeneration.service.ts # Complete logo package generation
+│   ├── logoVariant.service.ts # Logo variant generation
+│   ├── mongodb.service.ts   # Database operations
+│   ├── openai.service.ts    # OpenAI integration for image generation
+│   └── storage.service.ts   # S3-compatible image storage
+├── types/                   # TypeScript type definitions
+│   └── index.ts            # Shared interfaces and types
+└── utils/                  # Utility functions
+    ├── escapeMarkdownV2.ts # Telegram markdown escaping
+    ├── imageQueue.ts       # Background job processing
+    ├── intervalManager.ts  # User interval management
+    ├── retry.ts           # API retry mechanism
+    ├── stickerUtils.ts     # Sticker creation utilities
     └── telegramStickerPack.ts # Telegram sticker pack management
 ```
 
@@ -52,204 +52,138 @@ src/
 ### 1. Bot Entry Point (`index.ts`)
 
 - Initializes the Telegraf bot instance
-- Sets up middleware pipeline
-- Registers scenes and command handlers
-- Configures database connections
-- Handles graceful shutdown
+- Sets up middleware for i18n, user loading, and scene management
+- Handles command routing and callback queries
+- Manages image generation queue processing
+- Integrates OpenAI gpt-image-1 for logo generation
 
-### 2. Scene-Based Conversation Flow
+### 2. Scene System (`scenes/`)
 
-The bot uses Telegraf scenes to manage multi-step conversations:
+#### Logo Wizard (`logoWizard.scene.ts`)
+- Multi-step conversation flow for logo generation
+- Collects brand name, industry, style preferences, and design requirements
+- Uses comprehensive prompt engineering to capture all user input
+- Generates multiple logo concepts using OpenAI gpt-image-1
 
-- **Logo Wizard**: Collects brand name, industry, style preferences
-- **Meme Wizard**: Handles meme generation with quality options
-- **Sticker Wizard**: Manages bulk sticker creation (1-100 stickers)
+#### Meme Wizard (`memeWizard.scene.ts`)
+- Specialized flow for crypto/pop culture meme generation
+- Captures meme topic, audience, mood, and style preferences
+- Handles image uploads for meme templates
+- Generates viral-ready memes with proper text positioning
+
+#### Sticker Wizard (`stickerWizard.scene.ts`)
+- Creates Telegram sticker packs
+- Supports various sticker styles and themes
+- Generates multiple stickers in a cohesive pack
+- Handles text/phrase integration
 
 ### 3. Service Layer
 
-#### FluxService (`flux.service.ts`)
-- Integrates with Replicate API for Flux AI image generation
-- Builds enhanced prompts based on user inputs
-- Handles asynchronous generation and polling
-- Converts Replicate URLs to base64 for storage
+#### OpenAIService (`openai.service.ts`)
+- Integrates with OpenAI API for image generation using gpt-image-1
+- Provides retry logic and error handling for API calls
+- Supports image generation with context for icon extraction
+- Handles comprehensive prompt building with user input
+- Includes token usage tracking and debug logging
 
-#### MongoDBService (`mongodb.service.ts`)
-- Manages database connections and operations
-- Handles user profile management
-- Tracks generation history and feedback
+#### CompleteAssetGenerationService (`completeAssetGeneration.service.ts`)
+- Generates complete logo packages with specialized icons
+- Uses Sharp for image processing and resizing
+- Creates ZIP packages with organized file structure
+- Integrates with OpenAI for icon extraction
+- Downloads existing logos instead of regenerating them
+
+#### LogoVariantService (`logoVariant.service.ts`)
+- Generates logo variants (standard, transparent, white, icon)
+- Uses OpenAI for variant generation
+- Handles different logo formats and styles
 
 #### StorageService (`storage.service.ts`)
-- Manages S3-compatible image storage
-- Handles image uploads and URL generation
-- Supports both LocalStack (development) and AWS S3 (production)
+- Manages image uploads to S3-compatible storage
+- Handles Cloudinary integration for image processing
+- Provides URL generation for stored images
 
-### 4. Data Models
+### 4. Database Models (`models/`)
 
 #### User Model
-```typescript
-interface IUser {
-  userId: number;          // Telegram user ID
-  starBalance: number;     // Available star tokens
-  freeGeneration: boolean; // Free generation credit status
-  language: string;        // Preferred language
-  createdAt: Date;
-  lastActive: Date;
-}
-```
+- Stores user preferences and generation history
+- Tracks free generation usage and star balance
+- Manages user feedback and ratings
 
 #### ImageGeneration Model
-```typescript
-interface IImageGeneration {
-  userId: number;
-  type: 'logo' | 'meme' | 'sticker';
-  prompt: string;
-  imageUrl: string;
-  cost: number;           // Stars deducted
-  quality?: string;       // For memes: 'high', 'medium', 'good'
-  metadata: object;       // Additional generation data
-  createdAt: Date;
-}
+- Records all image generation requests and results
+- Stores generation metadata and user feedback
+- Tracks generation costs and success rates
+
+### 5. Utility Functions (`utils/`)
+
+#### Retry Mechanism (`retry.ts`)
+- Implements exponential backoff for API calls
+- Provides user-friendly error handling
+- Supports configurable retry attempts and delays
+
+#### Image Queue (`imageQueue.ts`)
+- Manages background image generation processing
+- Handles job queuing and status updates
+- Provides progress tracking for users
+
+## Key Features
+
+### 1. Comprehensive Prompt Engineering
+- Captures ALL user input in structured format
+- Builds detailed context for GPT Image generation
+- Includes brand identity, design preferences, and technical requirements
+- Creates distinct icon-focused prompts when icons are specified
+
+### 2. Intelligent Image Generation
+- Uses OpenAI gpt-image-1 for high-quality logo generation
+- Generates multiple concepts for user selection
+- Supports transparent PNG output with proper backgrounds
+- Includes retry logic for robust API handling
+
+### 3. Complete Asset Packages
+- Generates specialized icons using AI with logo context
+- Creates size variants optimized for different platforms
+- Packages everything in organized ZIP files
+- Includes favicon, app icons, social media icons, and print versions
+
+### 4. Multi-Language Support
+- Supports English, Russian, Spanish, French, and Chinese
+- Uses telegraf-i18n for localization
+- Provides localized error messages and UI text
+
+### 5. Robust Error Handling
+- Implements retry mechanisms with exponential backoff
+- Provides user-friendly error messages
+- Gracefully handles API failures and network issues
+- Continues processing even if individual generations fail
+
+## Environment Variables
+
+```env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+OPENAI_API_KEY=your_openai_api_key
+MONGODB_URI=your_mongodb_connection_string
+CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 ```
 
-## Conversation Flow
+## Usage
 
-### Logo Generation
-1. User initiates with `/start` → `Generate Logo`
-2. **Name Scene**: Collect business name
-3. **Industry Scene**: Select industry category
-4. **Style Scene**: Choose visual preferences
-5. **Generation**: Create 4 logo variants using Flux AI
-6. **Selection**: User picks preferred option
-7. **High-res**: Generate final high-resolution version
+1. Start the bot with `npm start`
+2. Use `/start` to begin logo generation
+3. Follow the wizard to provide brand information
+4. Select your preferred logo from generated options
+5. Download complete asset packages with specialized icons
 
-### Meme Generation
-1. User selects `Generate Meme`
-2. **Topic Input**: Enter meme topic/concept
-3. **Quality Selection**: Choose quality level (affects cost)
-4. **Generation**: Create meme using Flux AI
-5. **Delivery**: Send completed meme to user
+## Technology Stack
 
-### Sticker Generation
-1. User selects `Generate Stickers`
-2. **Theme Input**: Enter sticker pack theme
-3. **Quantity**: Choose number of stickers (1-100)
-4. **Generation**: Create sticker pack using Flux AI
-5. **Pack Creation**: Format as Telegram sticker pack
-
-## Star Token Economy
-
-### Pricing Structure
-- **Logos**: 50 stars per image
-- **Stickers**: 50 stars per image
-- **Memes**:
-  - Good quality: 50 stars
-  - Medium quality: 70 stars
-  - High quality: 90 stars
-
-### Free Generation
-- Every user gets 1 free generation upon registration
-- After free credit is used, star tokens are required
-- Free status tracked in user profile
-
-### Balance Management
-```typescript
-// Example balance check and deduction
-const user = await User.findOne({ userId });
-const cost = calculateGenerationCost(type, quality, quantity);
-
-if (!user.freeGeneration && user.starBalance < cost) {
-  throw new Error('Insufficient star balance');
-}
-
-if (user.freeGeneration) {
-  user.freeGeneration = false;
-} else {
-  user.starBalance -= cost;
-}
-
-await user.save();
-```
-
-## Internationalization
-
-The bot supports multiple languages through the i18n middleware:
-
-- English (en) - Default
-- Spanish (es)
-- French (fr)
-- Russian (ru)
-- Chinese (zh)
-
-Language files located in `/locales/` directory.
-
-## Error Handling
-
-### Service-Level Errors
-- API timeouts and failures
-- Database connection issues
-- Storage service problems
-
-### User-Level Errors
-- Insufficient star balance
-- Invalid input validation
-- Generation failures
-
-### Recovery Strategies
-- Graceful fallbacks for API failures
-- User-friendly error messages
-- Automatic retry mechanisms for transient failures
-
-## Development Workflow
-
-### Adding New Features
-1. Define types in `/types/index.ts`
-2. Create service layer in `/services/`
-3. Build conversation flow in `/scenes/`
-4. Add database models in `/models/`
-5. Update main bot in `index.ts`
-
-### Testing
-- Unit tests for services and utilities
-- Integration tests for scene flows
-- Mock external API dependencies
-- Database transaction testing
-
-### Deployment
-1. Build TypeScript: `npm run build`
-2. Run migrations: Database schema updates
-3. Deploy services: Bot, MongoDB, S3
-4. Monitor logs: Check for errors and performance
-
-## Performance Considerations
-
-### Image Generation
-- Async processing with job queues
-- Progress indicators for long-running operations
-- Rate limiting to prevent API abuse
-
-### Database Optimization
-- Indexed queries on userId and timestamps
-- Connection pooling for concurrent requests
-- Cleanup of old generation data
-
-### Memory Management
-- Streaming for large image processing
-- Garbage collection of temporary files
-- Connection cleanup on shutdown
-
-## Security
-
-### API Keys
-- Environment variable storage
-- No hardcoded credentials
-- Rotation procedures documented
-
-### User Data
-- Minimal data collection
-- Secure storage of generation history
-- GDPR compliance considerations
-
-### Input Validation
-- Sanitize all user inputs
-- Validate file uploads
-- Rate limiting protection
+- **Bot Framework**: Telegraf.js
+- **AI Generation**: OpenAI gpt-image-1
+- **Database**: MongoDB with Mongoose
+- **Image Processing**: Sharp
+- **Storage**: Cloudinary
+- **Queue Management**: BullMQ
+- **Internationalization**: telegraf-i18n
+- **Language**: TypeScript
