@@ -1391,10 +1391,25 @@ const startBot = async () => {
         });
       });
       
-      // Set webhook
+      // Set webhook with verification
       try {
-        await bot.telegram.setWebhook(webhookUrl);
+        const webhookResult = await bot.telegram.setWebhook(webhookUrl);
         console.log(`✅ Webhook set to: ${webhookUrl}`);
+        console.log('Webhook result:', webhookResult);
+        
+        // Verify webhook was actually set
+        setTimeout(async () => {
+          try {
+            const webhookInfo = await bot.telegram.getWebhookInfo();
+            console.log('Webhook verification:', webhookInfo);
+            if (!webhookInfo.url) {
+              console.error('⚠️ WARNING: Webhook URL is empty - attempting to set again');
+              await bot.telegram.setWebhook(webhookUrl);
+            }
+          } catch (verifyError) {
+            console.error('Error verifying webhook:', verifyError);
+          }
+        }, 2000);
         
         // Start Express server
         app.listen(port, () => {
