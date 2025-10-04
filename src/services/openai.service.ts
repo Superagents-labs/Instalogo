@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { toFile } from 'openai';
 import { SessionData } from '../types';
 import { retryOpenAICall, handleImageGenerationError } from '../utils/retry';
 
@@ -375,6 +376,99 @@ export class OpenAIService {
       console.error('Error generating image:', error);
       throw error;
     }
+  }
+
+  /**
+   * Edit an uploaded image using OpenAI's GPT-Image-1 image editing capabilities
+   */
+  public async editImage(params: {
+    imageBuffer: Buffer;
+    prompt: string;
+    size?: '256x256' | '512x512' | '1024x1024';
+    model?: string;
+    userId?: number;
+  }): Promise<string[]> {
+    try {
+      console.log('[OpenAI] Starting image editing with GPT-Image-1...');
+      
+      // Create a clean Buffer copy for toFile compatibility
+      const imageData = params.imageBuffer instanceof Buffer ? params.imageBuffer : Buffer.from(params.imageBuffer);
+      const cleanBuffer = Buffer.from(imageData);
+      
+      // Use OpenAI's native image editing endpoint
+      const response = await this.client.images.edit({
+        model: params.model || 'gpt-image-1',
+        image: await toFile(cleanBuffer, 'image.png', { type: 'image/png' }),
+        prompt: params.prompt,
+        size: params.size || '1024x1024',
+        quality: 'high'
+      });
+      
+      // Log token usage and costs if available
+      if (response.usage) {
+        this.logTokenUsage(response.usage, 'GPT-Image-1 Edit');
+      } else {
+        // For GPT-Image-1, calculate estimated costs based on request parameters
+        const estimatedTokens = this.estimateImageEditTokens(params.prompt, params.size || '1024x1024');
+        const estimatedCost = (estimatedTokens.textInputTokens * this.PRICING.TEXT_INPUT) + 
+                             (estimatedTokens.imageInputTokens * this.PRICING.IMAGE_INPUT) + 
+                             (estimatedTokens.imageOutputTokens * this.PRICING.IMAGE_OUTPUT);
+        
+        console.log(`💰 [OpenAI Cost] GPT-Image-1 Edit (estimated):`);
+        console.log(`   Text Input: ${estimatedTokens.textInputTokens} tokens = $${(estimatedTokens.textInputTokens * this.PRICING.TEXT_INPUT).toFixed(6)}`);
+        console.log(`   Image Input: ${estimatedTokens.imageInputTokens} tokens = $${(estimatedTokens.imageInputTokens * this.PRICING.IMAGE_INPUT).toFixed(6)}`);
+        console.log(`   Image Output: ${estimatedTokens.imageOutputTokens} tokens = $${(estimatedTokens.imageOutputTokens * this.PRICING.IMAGE_OUTPUT).toFixed(6)}`);
+        console.log(`   💵 Total Estimated Cost: $${estimatedCost.toFixed(6)}`);
+      }
+      
+      if (response.data && response.data[0]) {
+        if (response.data[0].url) {
+          console.log('[OpenAI] Successfully edited image (URL format)');
+          return [response.data[0].url];
+        } else if (response.data[0].b64_json) {
+          // Convert base64 to data URL for consistency
+          const dataUrl = `data:image/png;base64,${response.data[0].b64_json}`;
+          console.log('[OpenAI] Successfully edited image (Base64 format)');
+          return [dataUrl];
+        } else {
+          throw new Error('No image data returned from editing');
+        }
+      } else {
+        throw new Error('No image data returned from editing');
+      }
+      
+    } catch (error) {
+      console.error('[OpenAI] Error in editImage:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Estimate token costs for GPT-Image-1 editing based on prompt and size
+   */
+  private estimateImageEditTokens(prompt: string, size: string): TokenCosts {
+    // Estimate text input tokens (approximately 1 token per 4 characters for prompt)
+    const textInputTokens = Math.ceil(prompt.length / 4);
+    
+    // GPT-Image-1 editing involves:
+    // - Input image tokens (depends on image size)
+    // - Output image tokens (depends on generated image size)
+    const sizeMultipliers: Record<string, { input: number, output: number }> = {
+      '256x256': { input: 250, output: 272 },
+      '512x512': { input: 500, output: 544 }, 
+      '1024x1024': { input: 1000, output: 1056 }
+    };
+    
+    const multipliers = sizeMultipliers[size] || sizeMultipliers['1024x1024'];
+    
+    return {
+      textInputTokens,
+      imageInputTokens: multipliers.input,
+      imageOutputTokens: multipliers.output,
+      totalCost: (textInputTokens * this.PRICING.TEXT_INPUT) + 
+                 (multipliers.input * this.PRICING.IMAGE_INPUT) + 
+                 (multipliers.output * this.PRICING.IMAGE_OUTPUT)
+    };
   }
 
 } 

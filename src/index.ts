@@ -61,7 +61,7 @@ export async function sendMainMenu(ctx: BotContext) {
           ],
           [
             { text: ctx.i18n.t('menu.generate_stickers'), callback_data: 'generate_stickers' },
-            { text: ctx.i18n.t('menu.edit_image'), callback_data: 'edit_sticker' }
+            { text: ctx.i18n.t('menu.edit_image'), callback_data: 'edit_image' }
           ],
           [
             { text: ctx.i18n.t('menu.starter_pack'), callback_data: 'starter_pack' },
@@ -353,12 +353,6 @@ bot.command('generate_stickers', async (ctx) => {
   await ctx.scene.enter('stickerWizard');
 });
 
-// Edit sticker command
-bot.command('edit_sticker', async (ctx) => {
-  await forceLeaveCurrentScene(ctx);
-  await ctx.reply(ctx.i18n.t('general.please_describe'));
-  (ctx.session as any).awaitingEditPrompt = true;
-});
 
 // Generate memes command (text trigger)
 bot.hears('Generate Memes', async (ctx) => {
@@ -413,10 +407,10 @@ bot.action('starter_pack', async (ctx) => {
   (ctx.session as any).awaitingStarterPackImage = true;
 });
 
-bot.action('edit_sticker', async (ctx) => {
+// Edit Image Action - Start the new wizard
+bot.action('edit_image', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(ctx.i18n.t('general.please_describe'));
-  (ctx.session as any).awaitingEditPrompt = true;
+  await ctx.scene.enter('editImageWizard');
 });
 
 // In the photo handler, always reply with a debug message
@@ -466,53 +460,12 @@ bot.on('photo', async (ctx) => {
     // Clean up the file after use
     fs.unlinkSync(filePath);
     (ctx.session as any).awaitingStarterPackImage = false;
-  } else if ((ctx.session as any).awaitingStickerEdit || (ctx.session as any).stickerEditPrompt) {
-    // Handle photo for sticker editing
-    await ctx.reply(ctx.i18n.t('general.processing_image'));
-    
-    try {
-      const photo = ctx.message.photo[ctx.message.photo.length - 1];
-      const fileLink = await ctx.telegram.getFileLink(photo.file_id);
-      const response = await fetch(fileLink.href);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      
-      const userId = ctx.from.id;
-      const chatId = ctx.chat.id;
-      const prompt = (ctx.session as any).stickerEditPrompt || 'Create a beautiful sticker with transparent background';
-      
-      // Add to image queue
-      await imageQueue.add('edit-sticker', {
-        userId,
-        chatId,
-        prompt,
-        imageBuffer: buffer
-      });
-      
-      await ctx.reply(ctx.i18n.t('general.image_queued'));
-    } catch (error) {
-      console.error('Error processing image for editing:', error);
-      await ctx.reply(ctx.i18n.t('general.image_error'));
-    }
-    
-    // Reset session
-    delete (ctx.session as any).awaitingStickerEdit;
-    delete (ctx.session as any).stickerEditPrompt;
   }
 });
 
-// Handle text for edit prompt
+// Handle text commands (most text handling is now done within scenes)
 bot.on('text', async (ctx) => {
-  // Only process if we're awaiting an edit prompt
-  if ((ctx.session as any).awaitingEditPrompt) {
-    const prompt = ctx.message.text;
-    (ctx.session as any).stickerEditPrompt = prompt;
-    (ctx.session as any).awaitingEditPrompt = false;
-    (ctx.session as any).awaitingStickerEdit = true;
-    await ctx.reply('Great! Now please upload the image you want to edit into a sticker.');
-    return;
-  }
-  
-  // Keep the existing text message handling
+  // Text handling is primarily managed within individual scenes
   console.log('Received message:', ctx.message.text);
 });
 
@@ -2019,7 +1972,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '📦 Download Complete Package (ZIP)', callback_data: `download_complete_package_${userId}_${timestamp}_${logoIndex}` }
+                { text: '📦 Download Complete Package (ZIP) - 50⭐', callback_data: `download_complete_package_${userId}_${timestamp}_${logoIndex}` }
               ],
               [
                 { text: '📏 Size Variants', callback_data: `download_sizes_${userId}_${timestamp}_${logoIndex}` },
@@ -2402,9 +2355,48 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   const [, userId, timestamp, logoIndex] = ctx.match;
   const userIdNum = parseInt(userId);
   
-  console.log(`[Download] Download requested: userId=${userId}, timestamp=${timestamp}, logoIndex=${logoIndex}`);
+  console.log(`[Download] Complete package download requested: userId=${userId}, timestamp=${timestamp}, logoIndex=${logoIndex}`);
   
   try {
+    // Check if we're in testing mode
+    const isTestingMode = process.env.NODE_ENV !== 'production' || process.env.BETA_TESTING === 'true';
+    
+    if (!isTestingMode) {
+      // Production mode - check user balance for 50 credits
+      const user = await User.findOne({ userId: userIdNum });
+      if (!user) {
+        await ctx.reply('❌ User not found. Please try again.');
+        return;
+      }
+      
+      const requiredCredits = 50;
+      if (user.starBalance < requiredCredits) {
+        await ctx.reply(
+          `❌ Insufficient balance!\n\n` +
+          `Complete package costs: ${requiredCredits} ⭐\n` +
+          `Your balance: ${user.starBalance} ⭐\n\n` +
+          `Please top up your balance to download the complete package.`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+      
+      // Deduct credits
+      user.starBalance -= requiredCredits;
+      await user.save();
+      
+      console.log(`[Download] Deducted ${requiredCredits} credits from user ${userIdNum}. New balance: ${user.starBalance}`);
+    } else {
+      console.log(`[Download] Testing mode - skipping payment for user ${userIdNum}`);
+    }
+    
     const selectedLogo = (ctx.session as any)?.selectedLogo;
     
     console.log(`[Download] Session check: selectedLogo exists=${!!selectedLogo}, completePackage exists=${!!selectedLogo?.completePackage}`);
@@ -2455,6 +2447,9 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
     
     console.log(`[Download] Sending ZIP document to user...`);
     
+    // Check testing mode for display
+    const isTestingModeDisplay = process.env.NODE_ENV !== 'production' || process.env.BETA_TESTING === 'true';
+    
     await ctx.replyWithDocument(
       { 
         source: zipBuffer, 
@@ -2467,6 +2462,7 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         `• Size variants (favicon to print)\n` +
         `• Vector formats (SVG, PDF, EPS)\n` +
         `• Social media assets\n\n` +
+        `${isTestingModeDisplay ? '🧪 Testing Mode - FREE!' : '💰 Cost: 50⭐'}\n` +
         `Perfect for professional use! 🚀`,
         parse_mode: 'Markdown',
         reply_markup: {

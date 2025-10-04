@@ -82,6 +82,7 @@ export function startImageWorker(processImageJob: JobProcessor) {
     });
   });
 
+
   // Start agenda
   (async function() {
     await agenda.start();
