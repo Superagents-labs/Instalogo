@@ -42,3 +42,8 @@ venv/
 # Ignore yarn and npm lock files if not needed (optional)
 # yarn.lock
 # package-lock.json 
+# Generated files
+stickers/
+temp/
+test/*.png
+test/*.zip
