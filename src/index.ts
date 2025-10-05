@@ -856,12 +856,17 @@ const startBot = async () => {
             // Store in session for variant generation
             (session as any).generationData = generationData;
             
-            // Store in database with seed information
-            await ImageGeneration.create({
+            // Store in database with seed information and API cost
+            try {
+            const createdLogoGen = await ImageGeneration.create({
                 userId,
                 type: 'logo',
               cost,
               imageUrl: generatedLogos[0].url, // Store first logo URL
+              apiProvider: 'openai',
+              apiModel: openaiService.lastModel || undefined,
+              apiCostUsd: openaiService.lastCallCostUsd || 0,
+              apiUsage: openaiService.lastCallUsage || undefined,
               originalPrompt: finalPrompts[0],
               selectedImageIndex: 0,
               seed: generatedLogos[0].seed, // Store first seed
@@ -875,6 +880,10 @@ const startBot = async () => {
                 generationTimestamp: generationTimestamp // Store for callback data
               }
             });
+            console.log(`[DB] Logo generation saved _id=${createdLogoGen._id} apiCostUsd=$${(createdLogoGen.apiCostUsd||0).toFixed(6)} provider=${createdLogoGen.apiProvider}`);
+            } catch (dbErr) {
+              console.error('[DB] Failed to save logo ImageGeneration:', dbErr);
+            }
             
             // Update the user's status if needed
             if (job.data.updateUser) {
@@ -975,14 +984,24 @@ const startBot = async () => {
               });
 
               
-              // Create DB record for the meme
-              const imageGen = await ImageGeneration.create({
+              // Create DB record for the meme with API cost logging
+              let imageGen: any;
+              try {
+              imageGen = await ImageGeneration.create({
                 userId,
                 type: 'meme',
                 quality,
                 cost,
                 imageUrl: memeUrl,
+                apiProvider: 'flux',
+                apiModel: fluxService.lastModel || undefined,
+                apiCostUsd: fluxService.lastCallCostUsd || 0,
+                apiUsage: undefined,
               });
+              console.log(`[DB] Meme generation saved _id=${imageGen._id} apiCostUsd=$${(imageGen.apiCostUsd||0).toFixed(6)} provider=${imageGen.apiProvider}`);
+              } catch (dbErr) {
+                console.error('[DB] Failed to save meme ImageGeneration:', dbErr);
+              }
               
               // Update the user's status if needed
               if (job.data.updateUser) {
@@ -1119,14 +1138,24 @@ const startBot = async () => {
                   // Calculate cost per sticker
                   const stickerCost = i === 0 && !freeGenerationUsed ? 0 : costPerSticker;
                   
-                  // Create DB record for this sticker
-                  const imageGen = await ImageGeneration.create({
+                  // Create DB record for this sticker with API cost logging
+                  let imageGen: any;
+                  try {
+                  imageGen = await ImageGeneration.create({
                     userId,
                     type: 'sticker',
                     cost: stickerCost,
                     imageUrl: stickerUrl,
                     localPath: localStickerPath,
+                    apiProvider: 'flux',
+                    apiModel: fluxService.lastModel || undefined,
+                    apiCostUsd: fluxService.lastCallCostUsd || 0,
+                    apiUsage: undefined,
                   });
+                  console.log(`[DB] Sticker generation saved _id=${imageGen._id} apiCostUsd=$${(imageGen.apiCostUsd||0).toFixed(6)} provider=${imageGen.apiProvider}`);
+                  } catch (dbErr) {
+                    console.error('[DB] Failed to save sticker ImageGeneration:', dbErr);
+                  }
                   
                   // Send sticker to user
                   await bot.telegram.sendPhoto(chatId, { source: buffer }, {

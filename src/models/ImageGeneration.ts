@@ -8,6 +8,11 @@ export interface IImageGeneration extends Document {
   timestamp: Date;
   imageUrl: string;
   localPath?: string;
+  // API cost logging
+  apiProvider?: 'openai' | 'flux' | 'replicate' | 'other';
+  apiModel?: string;
+  apiCostUsd?: number;
+  apiUsage?: any;
   
   // Seed for consistent generation
   seed?: number;
@@ -38,6 +43,11 @@ const ImageGenerationSchema: Schema = new Schema({
   timestamp: { type: Date, default: Date.now },
   imageUrl: { type: String, required: true },
   localPath: { type: String },
+  // API cost logging
+  apiProvider: { type: String },
+  apiModel: { type: String },
+  apiCostUsd: { type: Number },
+  apiUsage: { type: Schema.Types.Mixed },
   
   // Seed for consistent generation
   seed: { type: Number },

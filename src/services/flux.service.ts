@@ -2,6 +2,10 @@ import Replicate from 'replicate';
 
 export class FluxService {
   private replicate: Replicate;
+  // Expose last call cost for DB logging (approximate)
+  public lastCallCostUsd: number | null = null;
+  public lastModel: string | null = null;
+  public lastMetrics: any = null;
 
   constructor() {
     const token = process.env.REPLICATE_API_TOKEN;
@@ -30,6 +34,9 @@ export class FluxService {
     const results: string[] = [];
 
     try {
+      // reset per-call accumulators
+      this.lastCallCostUsd = 0;
+      this.lastMetrics = null;
       console.log(`[FLUX] Starting sticker generation for user: ${params.userId}`);
       console.log(`[FLUX] Prompt: ${params.prompt.substring(0, 120)}...`);
       console.log(`[FLUX] Total requested: ${totalRequested} (batching by ${MAX_PER_REQUEST})`);
@@ -41,30 +48,32 @@ export class FluxService {
         batchIndex += 1;
         console.log(`[FLUX] Batch ${batchIndex}: generating ${batchSize} stickers`);
 
-        const output = await this.replicate.run(
-          'black-forest-labs/flux-schnell',
-          {
-            input: {
-              prompt: params.prompt,
-              num_inference_steps: 4,
-              guidance_scale: 1,
-              width: 512,
-              height: 512,
-              num_outputs: batchSize,
-              go_fast: true,
-              output_format: 'png',
-              output_quality: 90
-            }
-          }
-        ) as string[];
+        const modelId = 'black-forest-labs/flux-schnell';
+        const { output, metrics, costUsd } = await this.runWithMetrics(modelId, {
+          prompt: params.prompt,
+          num_inference_steps: 4,
+          guidance_scale: 1,
+          width: 512,
+          height: 512,
+          num_outputs: batchSize,
+          go_fast: true,
+          output_format: 'png',
+          output_quality: 90
+        });
 
         if (Array.isArray(output)) {
           results.push(...output);
         }
+        // Accurate cost logging using prediction metrics
+        this.lastCallCostUsd = (this.lastCallCostUsd || 0) + costUsd;
+        this.lastModel = modelId;
+        this.lastMetrics = metrics;
+        console.log(`[FLUX] Batch ${batchIndex} metrics: predict_time=${metrics?.predict_time || 0}s, batch_cost=$${costUsd.toFixed(6)}`);
         remaining -= batchSize;
       }
 
       console.log(`[FLUX] Successfully generated ${results.length}/${totalRequested} stickers for user: ${params.userId}`);
+      console.log(`[FLUX] Total cost for this stickers job: $${(this.lastCallCostUsd || 0).toFixed(6)}`);
       return results;
 
     } catch (error) {
@@ -89,6 +98,9 @@ export class FluxService {
     const results: string[] = [];
 
     try {
+      // reset per-call accumulators
+      this.lastCallCostUsd = 0;
+      this.lastMetrics = null;
       console.log(`[FLUX] Starting meme generation for user: ${params.userId}`);
       console.log(`[FLUX] Prompt: ${params.prompt.substring(0, 120)}...`);
       console.log(`[FLUX] Total requested: ${totalRequested} (batching by ${MAX_PER_REQUEST})`);
@@ -100,30 +112,32 @@ export class FluxService {
         batchIndex += 1;
         console.log(`[FLUX] Batch ${batchIndex}: generating ${batchSize} memes`);
 
-        const output = await this.replicate.run(
-          'black-forest-labs/flux-schnell',
-          {
-            input: {
-              prompt: params.prompt,
-              num_inference_steps: 4,
-              guidance_scale: 1,
-              width: 1024,
-              height: 1024,
-              num_outputs: batchSize,
-              go_fast: true,
-              output_format: 'png',
-              output_quality: 90
-            }
-          }
-        ) as string[];
+        const modelId = 'black-forest-labs/flux-schnell';
+        const { output, metrics, costUsd } = await this.runWithMetrics(modelId, {
+          prompt: params.prompt,
+          num_inference_steps: 4,
+          guidance_scale: 1,
+          width: 1024,
+          height: 1024,
+          num_outputs: batchSize,
+          go_fast: true,
+          output_format: 'png',
+          output_quality: 90
+        });
 
         if (Array.isArray(output)) {
           results.push(...output);
         }
+        // Accurate cost logging using prediction metrics
+        this.lastCallCostUsd = (this.lastCallCostUsd || 0) + costUsd;
+        this.lastModel = modelId;
+        this.lastMetrics = metrics;
+        console.log(`[FLUX] Batch ${batchIndex} metrics: predict_time=${metrics?.predict_time || 0}s, batch_cost=$${costUsd.toFixed(6)}`);
         remaining -= batchSize;
       }
 
       console.log(`[FLUX] Successfully generated ${results.length}/${totalRequested} memes for user: ${params.userId}`);
+      console.log(`[FLUX] Total cost for this memes job: $${(this.lastCallCostUsd || 0).toFixed(6)}`);
       return results;
 
     } catch (error) {
@@ -198,6 +212,67 @@ export class FluxService {
       '=== FINAL INSTRUCTION ===',
       `Generate ${count} professional ${style} stickers that incorporate ALL the above context, requirements, and specifications. Each sticker should be unique, engaging, and perfectly suited for a Telegram sticker pack.`
     ].join('\n');
+  }
+
+  /**
+   * Run a Replicate prediction using the model's latest version and return output + metrics
+   */
+  private async runWithMetrics(modelSlug: string, input: Record<string, any>): Promise<{ output: string[]; metrics: any; costUsd: number }>{
+    const token = process.env.REPLICATE_API_TOKEN as string;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    } as any;
+
+    // 1) Resolve latest model version
+    const modelRes = await fetch(`https://api.replicate.com/v1/models/${modelSlug}`, { headers });
+    if (!modelRes.ok) {
+      throw new Error(`Failed to fetch model info for ${modelSlug}: ${modelRes.status} ${modelRes.statusText}`);
+    }
+    const modelJson: any = await modelRes.json();
+    const versionId: string | undefined = modelJson?.latest_version?.id;
+    if (!versionId) throw new Error('Could not resolve latest_version for model');
+
+    // 2) Create prediction
+    const createRes = await fetch('https://api.replicate.com/v1/predictions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ version: versionId, input })
+    });
+    if (!createRes.ok) {
+      const text = await createRes.text();
+      throw new Error(`Failed to create prediction: ${createRes.status} ${createRes.statusText} - ${text}`);
+    }
+    const created: any = await createRes.json();
+    const id: string = created.id;
+
+    // 3) Poll until completion
+    let status = created.status;
+    let prediction: any = created;
+    const start = Date.now();
+    while (status !== 'succeeded' && status !== 'failed' && status !== 'canceled') {
+      await new Promise(r => setTimeout(r, 1500));
+      const getRes = await fetch(`https://api.replicate.com/v1/predictions/${id}`, { headers });
+      prediction = await getRes.json();
+      status = prediction.status;
+      if (Date.now() - start > 600000) { // 10 min timeout
+        throw new Error('Replicate prediction timed out');
+      }
+    }
+    if (status !== 'succeeded') {
+      throw new Error(`Replicate prediction ${status}`);
+    }
+
+    const metrics = prediction.metrics || {};
+    const outputs = Array.isArray(prediction.output) ? prediction.output.length : 0;
+    const pricePerImageRaw = process.env.FLUX_PRICE_PER_IMAGE_USD;
+    const pricePerImage = Number(pricePerImageRaw);
+    if (!(pricePerImage > 0)) {
+      console.warn('[FLUX] FLUX_PRICE_PER_IMAGE_USD is not set or invalid; recording $0 cost. Set it to e.g. 0.003 for flux-schnell.');
+    }
+    const costUsd = (outputs || 0) * (pricePerImage > 0 ? pricePerImage : 0);
+
+    return { output: prediction.output as string[], metrics, costUsd };
   }
 }
 

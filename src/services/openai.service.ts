@@ -19,6 +19,10 @@ interface TokenCosts {
  */
 export class OpenAIService {
   private client: OpenAI;
+  // Store last computed API cost for logging to DB by callers
+  public lastCallCostUsd: number | null = null;
+  public lastCallUsage: any = null;
+  public lastModel: string | null = null;
   
   // OpenAI pricing per token (as of current pricing)
   private readonly PRICING = {
@@ -79,10 +83,14 @@ export class OpenAIService {
     try {
       if (!usage) {
         console.log(`[OpenAI Cost] ${operation}: No usage data available`);
+        this.lastCallUsage = null;
+        this.lastCallCostUsd = null;
         return;
       }
 
       const costs = this.calculateTokenCosts(usage);
+      this.lastCallUsage = usage;
+      this.lastCallCostUsd = costs.totalCost;
       
       console.log(`💰 [OpenAI Cost] ${operation}:`);
       console.log(`   Text Input: ${costs.textInputTokens} tokens = $${(costs.textInputTokens * this.PRICING.TEXT_INPUT).toFixed(6)}`);
@@ -232,6 +240,7 @@ export class OpenAIService {
         if (response.usage) {
           this.logTokenUsage(response.usage, 'Logo Generation');
         }
+        this.lastModel = 'gpt-4.1-mini:image_generation';
         
         const imageData = response.output
           .filter((output: any) => output.type === 'image_generation_call')
@@ -299,6 +308,7 @@ export class OpenAIService {
         if (response.usage) {
           this.logTokenUsage(response.usage, 'Image Generation with Context');
         }
+        this.lastModel = 'gpt-4.1-mini:image_generation+context';
 
         // Extract image data from Responses API format (as per documentation)
         const imageData = response.output
@@ -419,7 +429,10 @@ export class OpenAIService {
         console.log(`   Image Input: ${estimatedTokens.imageInputTokens} tokens = $${(estimatedTokens.imageInputTokens * this.PRICING.IMAGE_INPUT).toFixed(6)}`);
         console.log(`   Image Output: ${estimatedTokens.imageOutputTokens} tokens = $${(estimatedTokens.imageOutputTokens * this.PRICING.IMAGE_OUTPUT).toFixed(6)}`);
         console.log(`   💵 Total Estimated Cost: $${estimatedCost.toFixed(6)}`);
+        this.lastCallCostUsd = estimatedCost;
+        this.lastCallUsage = { estimated: true, ...estimatedTokens };
       }
+      this.lastModel = params.model || 'gpt-image-1';
       
       if (response.data && response.data[0]) {
         if (response.data[0].url) {
