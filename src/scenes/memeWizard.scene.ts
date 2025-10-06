@@ -214,6 +214,8 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
   
   // Add an enter handler to reset session state
   scene.enter(async (ctx) => {
+    console.log('[MemeWizard] Scene entered for user:', ctx.from?.id);
+    
     // Reset all meme-related session variables, including legacy keys
     const memeKeys = [
       'memeImageFileId',
@@ -229,38 +231,20 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
       'memeStyleDesc',
       'memeText',
       '__uploadMessageShown',
-      '__punchlineShown'
+      '__punchlineShown',
+      'memeChoiceMade'
     ];
     memeKeys.forEach(key => delete (ctx.session as any)[key]);
     
-    // Save and clear the flag to avoid reusing it
-    const fromMemeStart = (ctx.session as any).__fromMemeStart;
-    delete (ctx.session as any).__fromMemeStart;
-    
-    // Check if the user has previous meme parameters
-    if (ctx.from?.id) {
-      try {
-        const hasLastParams = await mongodbService.getLastMemeParams(ctx.from.id);
-        
-        if (hasLastParams) {
-          // If they have previous parameters, offer to reload WITHOUT showing "Upload your image" message
-          await ctx.reply('You have previous meme settings:', {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '🔄 Use Previous Meme Settings', callback_data: 'reload_last_meme' }],
-                [{ text: '🆕 Create New Meme', callback_data: 'new_meme' }]
-              ]
-            }
-          });
-          return;
-        }
-      } catch (error) {
-        console.error('Error checking for previous meme parameters:', error);
-        // Continue with normal flow if there's an error
+    console.log('[MemeWizard] Starting normal flow - showing upload prompt');
+    // Always start with the normal flow - show upload prompt immediately
+    await ctx.reply('🖼️ Upload an image for your meme (or type "skip"):', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '⏭️ Skip Image', callback_data: 'meme_skip_image' }]
+        ]
       }
-    }
-    
-    // If no previous parameters or error, the wizard step 1 will handle showing the upload message
+    });
   });
   
   // Register action handlers
@@ -444,66 +428,6 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
     });
   });
   
-  // Add a new action to reload previous meme parameters
-  scene.action('reload_last_meme', async (ctx) => {
-    await ctx.answerCbQuery();
-    
-    if (!ctx.from?.id) {
-      await ctx.reply('Could not identify your user account.');
-      return;
-    }
-    
-    // Try to get the last meme parameters
-    const lastParams = await mongodbService.getLastMemeParams(ctx.from.id);
-    
-    if (!lastParams) {
-      await ctx.reply('No previous meme parameters found. Please create a new meme from scratch.');
-      return;
-    }
-    
-    // Restore the parameters to the session
-    Object.assign(ctx.session, lastParams);
-    
-    // Skip to the summary step
-    ctx.wizard.selectStep(11); // Assuming step 11 is the summary step
-    
-    // Display summary of loaded parameters
-    let summary = ctx.i18n.t('memes.meme_brief') + '\n';
-    summary += `• ${ctx.i18n.t('memes.topic')}: ${lastParams.memeTopic || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.audience')}: ${lastParams.memeAudience || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.mood')}: ${lastParams.memeMood || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.elements')}: ${lastParams.memeElements || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.punchline_caption')}: ${lastParams.memeCatch || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.format_type')}: ${lastParams.memeFormat || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.color')}: ${lastParams.memeColor || ''}`;
-    
-    await ctx.reply('Loaded your last meme settings:\n\n' + summary);
-    await ctx.reply('Ready to generate your meme?', {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: ctx.i18n.t('memes.generate_meme'), callback_data: 'confirm_meme' }],
-          [{ text: ctx.i18n.t('memes.restart'), callback_data: 'restart_meme' }]
-        ]
-      }
-    });
-  });
-
-  // Handle the new_meme action
-  scene.action('new_meme', async (ctx) => {
-    await ctx.answerCbQuery();
-    // Set the flag to indicate we've already shown the upload message
-    (ctx.session as any).__uploadMessageShown = true;
-    // Show the upload message manually
-    await ctx.reply('🖼️ Upload an image for your meme (or type "skip"):', {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '⏭️ Skip Image', callback_data: 'meme_skip_image' }]
-        ]
-      }
-    });
-    // Go to step 1 (upload image handling)
-    ctx.wizard.selectStep(1);
-  });
 
   // Add action handlers for skip image
   scene.action('meme_skip_image', async (ctx) => {
