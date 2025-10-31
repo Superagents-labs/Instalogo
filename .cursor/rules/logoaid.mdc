@@ -1,0 +1,424 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Cursor Rules: BrandForge Bot - Industry Standard Development Guidelines
+
+## 🎯 Project Context & Scope
+
+### **Core Mission**
+Advanced Telegram bot ecosystem for AI-powered creative content generation (logos, memes, stickers) using DSPy self-improving prompts and multi-modal quality assessment.
+
+### **Technology Stack (Industry Standard)**
+
+**Primary Services:**
+- **TypeScript/Node.js** - Main bot service with Telegraf framework
+- **Python/FastAPI** - DSPy intelligent generation microservice  
+- **MongoDB** - Primary database with Mongoose ODM
+- **Redis/BullMQ** - Job queuing and session management
+- **LocalStack/AWS S3** - Asset storage and CDN
+- **Docker** - Containerization and deployment
+
+**AI & ML Stack:**
+- **DSPy** - Self-improving prompt generation and optimization
+- **OpenAI GPT-4** - Content generation and reasoning
+- **CLIP** - Multi-modal quality assessment
+- **Tesseract OCR** - Text readability analysis
+
+**DevOps & Monitoring:**
+- **ESLint/TypeScript** - Code quality and type safety
+- **Jest** - Unit and integration testing
+- **GitHub Actions** - CI/CD pipeline
+- **Prometheus/Grafana** - Performance monitoring
+
+## 🏗️ Architecture Patterns (Enterprise Grade)
+
+### **1. Microservices Architecture**
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Telegram Bot  │◄──►│  DSPy Service   │◄──►│   MongoDB       │
+│   (TypeScript)  │    │   (Python)      │    │   (Database)    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   BullMQ        │    │   CLIP/OCR      │    │   S3 Storage    │
+│   (Queue)       │    │   (Quality)     │    │   (Assets)      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+### **2. Scene-Based Conversation Flow**
+- **Wizard Patterns**: Multi-step data collection with state management
+- **Context Preservation**: Session-aware across service boundaries
+- **Error Recovery**: Graceful fallbacks and retry mechanisms
+- **Internationalization**: Multi-language support with telegraf-i18n
+
+### **3. Event-Driven Processing**
+- **Asynchronous Job Processing**: BullMQ for heavy AI operations
+- **Real-time Feedback Collection**: User interaction tracking
+- **Quality Assessment Pipeline**: CLIP + OCR + custom metrics
+- **Self-Improvement Loop**: DSPy optimization based on feedback
+
+## 💻 Development Standards (Industry Best Practices)
+
+### **1. Code Quality & Type Safety**
+```typescript
+// ✅ REQUIRED: Strict TypeScript with comprehensive interfaces
+interface DSPyGenerationRequest {
+  generation_type: 'logo' | 'meme' | 'sticker';
+  user_id: string;
+  session_data: SessionData;
+  requirements: GenerationRequirements;
+}
+
+// ✅ REQUIRED: Comprehensive error handling
+export class DSPyIntegrationService {
+  public async generateIntelligentPrompt(
+    sessionData: SessionData,
+    generationType: GenerationType,
+    userId?: number
+  ): Promise<GenerationResult> {
+    try {
+      const result = await this.callDSPyService(request);
+      return this.validateAndTransform(result);
+    } catch (error) {
+      await this.logError(error, { userId, generationType });
+      return this.getFallbackResult(sessionData, generationType);
+    }
+  }
+}
+```
+
+### **2. Database Operations (MongoDB Best Practices)**
+```typescript
+// ✅ REQUIRED: Atomic operations with proper error handling
+export class UserService {
+  async deductStars(userId: number, amount: number): Promise<boolean> {
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const user = await User.findOneAndUpdate(
+          { userId, starBalance: { $gte: amount } },
+          { $inc: { starBalance: -amount } },
+          { new: true, session }
+        );
+        if (!user) throw new Error('Insufficient balance');
+        
+        await TransactionLog.create([{
+          userId, amount: -amount, type: 'generation', 
+          timestamp: new Date()
+        }], { session });
+      });
+      return true;
+    } catch (error) {
+      logger.error('Star deduction failed:', { userId, amount, error });
+      return false;
+    } finally {
+      await session.endSession();
+    }
+  }
+}
+```
+
+### **3. Security & Performance Standards**
+```typescript
+// ✅ REQUIRED: Input validation and sanitization
+export const validateGenerationRequest = (data: any): SessionData => {
+  const schema = Joi.object({
+    name: Joi.string().trim().max(100).required(),
+    tagline: Joi.string().trim().max(200).optional(),
+    industry: Joi.string().valid(...VALID_INDUSTRIES).required(),
+    // ... comprehensive validation
+  });
+  
+  const { error, value } = schema.validate(data);
+  if (error) throw new ValidationError(error.message);
+  return value;
+};
+
+// ✅ REQUIRED: Rate limiting and cost controls
+export const rateLimitMiddleware = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 generations per window
+  message: 'Too many generation requests',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+```
+
+## 🔄 DSPy Integration Standards
+
+### **1. Self-Improving Prompt Architecture**
+```python
+# ✅ REQUIRED: Comprehensive DSPy signatures with full wizard integration
+class IntelligentUserPreferenceAnalysis(dspy.Signature):
+    """Analyze comprehensive wizard data for optimal prompt generation"""
+    # ALL wizard fields must be included
+    brand_name: str = dspy.InputField(desc="Exact brand name from wizard")
+    industry_mission: str = dspy.InputField(desc="Industry and business purpose")
+    style_preferences: str = dspy.InputField(desc="Selected visual styles")
+    typography_choices: str = dspy.InputField(desc="Typography preferences")
+    color_preferences: str = dspy.InputField(desc="Color scheme choices")
+    target_audience: str = dspy.InputField(desc="Target demographics")
+    historical_performance: str = dspy.InputField(desc="Performance data")
+    
+    # Comprehensive analysis outputs
+    optimization_strategy: str = dspy.OutputField(desc="Style optimization plan")
+    quality_predictions: str = dspy.OutputField(desc="Expected quality metrics")
+    technical_specifications: str = dspy.OutputField(desc="Technical requirements")
+```
+
+### **2. Quality Assessment Pipeline**
+```typescript
+// ✅ REQUIRED: Multi-modal quality assessment
+export class QualityAssessmentService {
+  async assessGeneration(
+    imageUrl: string, 
+    generationData: DSPyGenerationResponse
+  ): Promise<QualityScores> {
+    const [clipScore, textScore, brandScore] = await Promise.all([
+      this.clipAssessment.assess(imageUrl, generationData.optimized_prompt),
+      this.textReadability.assess(imageUrl),
+      this.brandConsistency.assess(imageUrl, generationData.concepts)
+    ]);
+    
+    return new QualityScores({
+      clip_similarity: clipScore,
+      text_readability: textScore,
+      brand_consistency: brandScore,
+      overall_score: this.calculateWeighted(clipScore, textScore, brandScore)
+    });
+  }
+}
+```
+
+## 📊 Feature Scope & Boundaries
+
+### **✅ APPROVED FEATURES**
+
+**Core Generation Types:**
+1. **Logo Generation** - Business logo creation with comprehensive wizard
+2. **Meme Generation** - Crypto/pop culture meme creation
+3. **Sticker Generation** - Bulk sticker pack creation (1-100 stickers)
+
+**Intelligence Features:**
+4. **DSPy Self-Improvement** - Continuous prompt optimization
+5. **Quality Assessment** - CLIP + OCR + custom metrics
+6. **User Preference Learning** - Behavioral pattern analysis
+7. **Multi-Concept Generation** - 3 distinct approaches per request
+
+**Business Features:**
+8. **Star-Based Economy** - Virtual currency for premium features
+9. **Referral System** - User acquisition incentives
+10. **Analytics Dashboard** - Performance and quality metrics
+11. **Multi-Language Support** - i18n with telegraf-i18n
+
+### **❌ PROHIBITED SCOPE CREEP**
+- Video generation or animation
+- Integration with non-Telegram platforms
+- Blockchain/NFT integration
+- User-to-user messaging features
+- Payment processing beyond star system
+- Content moderation beyond basic safety
+- Social media posting automation
+
+## 🚀 Scalability & Performance Standards
+
+### **1. Horizontal Scaling Architecture**
+```typescript
+// ✅ REQUIRED: Stateless service design
+export class BotService {
+  constructor(
+    private dspyService: DSPyIntegrationService,
+    private queueService: BullMQService,
+    private cacheService: RedisService
+  ) {}
+  
+  // All state in external stores (MongoDB/Redis)
+  async handleGeneration(ctx: BotContext): Promise<void> {
+    const jobId = await this.queueService.addJob('generate', {
+      userId: ctx.from.id,
+      sessionData: await this.getSessionFromDB(ctx.from.id),
+      priority: this.calculatePriority(ctx.dbUser)
+    });
+    
+    await this.cacheService.setJobStatus(jobId, 'queued');
+    await ctx.reply(`Generation queued: ${jobId}`);
+  }
+}
+```
+
+### **2. Performance Monitoring**
+```typescript
+// ✅ REQUIRED: Comprehensive metrics collection
+export class PerformanceMonitor {
+  async trackGeneration(
+    type: GenerationType,
+    duration: number,
+    quality: QualityScores,
+    userId: number
+  ): Promise<void> {
+    await Promise.all([
+      this.metrics.histogram('generation_duration', duration, { type }),
+      this.metrics.gauge('quality_score', quality.overall_score, { type }),
+      this.logAnalytics({ userId, type, duration, quality })
+    ]);
+  }
+}
+```
+
+## 🛡️ Security & Compliance Standards
+
+### **1. Data Protection**
+```typescript
+// ✅ REQUIRED: PII handling and data retention
+export class DataProtectionService {
+  async anonymizeUserData(userId: number): Promise<void> {
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        // Remove PII but keep analytics data
+        await User.findOneAndUpdate(
+          { userId },
+          { 
+            $unset: { personalInfo: 1 },
+            $set: { anonymized: true, anonymizedAt: new Date() }
+          },
+          { session }
+        );
+        
+        // Keep generation patterns for DSPy improvement
+        await ImageGeneration.updateMany(
+          { userId },
+          { $set: { userAnonymized: true } },
+          { session }
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+}
+```
+
+### **2. API Security**
+```typescript
+// ✅ REQUIRED: Authentication and authorization
+export const authMiddleware = async (ctx: BotContext, next: () => Promise<void>) => {
+  const user = await User.findOne({ userId: ctx.from.id });
+  if (!user) {
+    ctx.dbUser = await User.create({ userId: ctx.from.id });
+  } else {
+    ctx.dbUser = user;
+  }
+  
+  // Rate limiting check
+  const rateKey = `rate:${ctx.from.id}`;
+  const requests = await redis.incr(rateKey);
+  if (requests === 1) await redis.expire(rateKey, 3600);
+  if (requests > 100) {
+    await ctx.reply('Rate limit exceeded. Please try again later.');
+    return;
+  }
+  
+  await next();
+};
+```
+
+## 🧪 Testing Standards
+
+### **1. Unit Testing (Jest + Supertest)**
+```typescript
+// ✅ REQUIRED: Comprehensive test coverage
+describe('DSPyIntegrationService', () => {
+  let service: DSPyIntegrationService;
+  let mockDSPyAPI: jest.Mocked<DSPyAPIClient>;
+  
+  beforeEach(() => {
+    mockDSPyAPI = createMockDSPyAPI();
+    service = new DSPyIntegrationService(mockDSPyAPI);
+  });
+  
+  it('should generate intelligent prompt with fallback', async () => {
+    mockDSPyAPI.generate.mockRejectedValueOnce(new Error('API Error'));
+    
+    const result = await service.generateIntelligentPrompt(
+      mockSessionData, 'logo', 12345
+    );
+    
+    expect(result.prompt).toBeDefined();
+    expect(result.result.generation_metadata.analysis.fallback).toBe(true);
+  });
+});
+```
+
+### **2. Integration Testing**
+```typescript
+// ✅ REQUIRED: End-to-end workflow testing
+describe('Logo Generation E2E', () => {
+  it('should complete full generation workflow', async () => {
+    const bot = createTestBot();
+    const user = await createTestUser();
+    
+    // Test wizard completion
+    await bot.sendMessage('/start');
+    await bot.clickButton('generate_logo');
+    
+    // Complete wizard steps
+    for (const step of logoWizardSteps) {
+      await bot.sendMessage(step.response);
+    }
+    
+    // Verify generation job queued
+    const jobs = await testQueue.getJobs(['waiting']);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].data.useDSPy).toBe(true);
+  });
+});
+```
+
+## 📈 Monitoring & Analytics
+
+### **1. Business Metrics**
+- Generation success rate (>95% target)
+- Average quality scores (>8.0/10 target)
+- User retention (7-day, 30-day)
+- Star economy health (earn vs spend ratio)
+- Referral conversion rates
+
+### **2. Technical Metrics**
+- API response times (<30s for generation)
+- DSPy service uptime (>99.9%)
+- Database query performance
+- Memory usage and leak detection
+- Error rates by service component
+
+## 🚨 Context Constraints for AI Assistants
+
+### **MUST DO:**
+1. **Follow DSPy Integration**: Always use DSPy for intelligent generation
+2. **Maintain Type Safety**: Strict TypeScript with comprehensive interfaces
+3. **Database Atomicity**: Use transactions for critical operations
+4. **Error Handling**: Graceful fallbacks and comprehensive logging
+5. **Performance**: Consider scalability in all solutions
+6. **Security**: Validate inputs, protect PII, implement rate limiting
+7. **Testing**: Write tests for new functionality
+
+### **MUST NOT DO:**
+1. **Bypass DSPy System**: Never suggest simple prompt concatenation
+2. **Ignore Type Safety**: Avoid `any` types or untyped operations
+3. **Database Anti-patterns**: No direct state in session without DB backup
+4. **Scope Creep**: Stay within approved feature boundaries
+5. **Security Risks**: Never expose API keys or skip validation
+6. **Performance Degradation**: Avoid blocking operations or memory leaks
+
+### **Architecture Decisions:**
+- **State Management**: MongoDB primary, Redis for caching only
+- **Job Processing**: BullMQ for all heavy operations
+- **Error Handling**: Fail gracefully with user-friendly messages
+- **Scaling**: Design for horizontal scaling from day one
+- **Monitoring**: Log everything, measure everything
+
+This is an **enterprise-grade, production-ready** system. Every suggestion must meet these industry standards for security, scalability, maintainability, and performance.

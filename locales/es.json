@@ -1,8 +1,8 @@
 {
   "welcome": {
-    "title": "BrandForge Bot 🤖",
+    "title": "Instalogo Bot 🤖",
     "what_to_do": "¿Qué deseas hacer?",
-    "star_balance": "Tus Créditos",
+    "star_balance": "Tu Balance de Estrellas",
     "built_by": "Creado por SuperAgent Labs"
   },
   "menu": {
@@ -18,7 +18,6 @@
   "general": {
     "photo_received": "¡Foto recibida! (debug)",
     "please_upload": "¡Por favor sube una imagen PNG (512x512, <512KB) para usar como sticker inicial!",
-    "please_describe": "Por favor proporciona una descripción de cómo quieres modificar la imagen:",
     "starter_pack_created": "¡Tu pack de stickers ha sido creado! [Ver aquí](https://t.me/addstickers/{{packName}})",
     "processing_image": "Procesando tu imagen para la creación de stickers...",
     "image_queued": "¡Tu imagen está en cola para edición! Te notificaré cuando esté lista.",
@@ -81,7 +80,9 @@
     "color": "Color",
     "generate_meme": "Generar Meme 😂",
     "generating": "Generando tu meme ahora...",
-    "request_queued": "Tu solicitud de generación de meme está en cola. {{costMessage}} Serás notificado cuando comience a procesarse."
+    "request_queued": "Tu solicitud de generación de meme está en cola. {{costMessage}} Serás notificado cuando comience a procesarse.",
+    "free_generation": "Se utilizará tu generación gratuita.",
+    "stars_deducted": "Se deducirán {{totalCost}} estrellas de tu balance."
   },
   "logo": {
     "brand_name": "¿Cuál es el nombre de tu marca o proyecto? (Ortografía y puntuación exactas)",
@@ -101,6 +102,8 @@
     "generating": "¡Genial! Generando tus conceptos de logo ahora...",
     "generating_based_on": "Generando tus conceptos de logo basados en tus respuestas...",
     "request_queued": "Tu solicitud de generación de logo está en cola. {{costMessage}} Serás notificado cuando comience a procesarse.",
+    "free_generation": "Se utilizará tu generación gratuita.",
+    "stars_deducted": "Se deducirán {{totalCost}} estrellas de tu balance.",
     "please_answer_text": "Por favor, responde usando texto.",
     "first_tell_name": "Por favor, primero dime el nombre de tu negocio.",
     "whats_business_name": "🎨 ¡Genial! ¿Cuál es el nombre de tu negocio?",
@@ -132,16 +135,14 @@
     "back_to_history": "Volver al Historial"
   },
   "stars": {
-    "choose_amount": "Elige cuántos créditos de logo te gustaría comprar:",
-    "stars_100": "100 Créditos - 100 ⭐",
-    "stars_500": "500 Créditos - 500 ⭐",
-    "stars_1000": "1000 Créditos - 950 ⭐ (5% desc.)",
-    "stars_2500": "2500 Créditos - 2250 ⭐ (10% desc.)",
-    "how_to_buy": "💡 ¿No tienes Estrellas? Solo toca Pagar y Telegram te permitirá comprar Estrellas al instante!",
+    "choose_amount": "Elige cuántas estrellas te gustaría comprar:",
+    "stars_100": "100 Estrellas - $4.99",
+    "stars_500": "500 Estrellas - $19.99",
+    "stars_1000": "1000 Estrellas - $34.99",
+    "stars_2500": "2500 Estrellas - $69.99",
     "payment_unavailable": "Lo siento, el sistema de pago está temporalmente no disponible. Por favor, inténtalo más tarde.",
-    "payment_successful": "✅ ¡Pago exitoso! {{amount}} créditos de logo añadidos. Balance: {{balance}} créditos.",
+    "payment_successful": "✅ ¡Pago exitoso! Se han añadido {{amount}} ⭐ estrellas a tu balance. Tu nuevo balance es de {{balance}} ⭐ estrellas.",
     "user_not_found": "Usuario no encontrado. Por favor, contacta con soporte.",
-    "error_updating": "Pago recibido pero hubo un error al actualizar tu balance. Por favor, contacta con soporte.",
-    "stars_deducted": "{{totalCost}} créditos serán usados para esta generación."
+    "error_updating": "Pago recibido pero hubo un error al actualizar tu balance. Por favor, contacta con soporte."
   }
 } 

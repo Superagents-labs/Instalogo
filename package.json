@@ -4,6 +4,7 @@
   "description": "Telegram bot for generating business logos using OpenAI",
   "main": "dist/index.js",
   "scripts": {
+    "prebuild": "npm install --force",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
@@ -11,8 +12,7 @@
     "test": "jest",
     "start:all": "./start-all-services.sh",
     "stop:all": "./stop-all-services.sh",
-    "restart:all": "./stop-all-services.sh && ./start-all-services.sh",
-    "postinstall": "npx sharp-installer || true"
+    "restart:all": "./stop-all-services.sh && ./start-all-services.sh"
   },
   "keywords": [
     "telegram",
@@ -23,17 +23,15 @@
   ],
   "author": "",
   "license": "ISC",
-  "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
-  },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.802.0",
     "@fal-ai/client": "^1.4.0",
     "@imgly/background-removal": "^1.6.0",
     "@imgly/background-removal-node": "^1.4.3",
     "agenda": "^5.0.0",
+    "aws-sdk": "^2.1692.0",
     "axios": "^1.9.0",
-    "cloudinary": "^2.7.0",
+    "cloudinary": "^1.41.3",
     "dotenv": "^16.3.1",
     "express": "^5.1.0",
     "image-size": "^2.0.2",
@@ -42,20 +40,22 @@
     "mongoose": "^8.14.1",
     "node-fetch": "^2.7.0",
     "openai": "^4.6.0",
-    "replicate": "^1.0.1",
+    "replicate": "^1.2.0",
     "sharp": "0.32.6",
     "telegraf": "^4.16.3",
     "telegraf-i18n": "^6.6.0"
   },
   "devDependencies": {
+    "@types/agenda": "^3.0.2",
     "@types/axios": "^0.9.36",
+    "@types/dotenv": "^6.1.1",
     "@types/express": "^5.0.3",
     "@types/image-size": "^0.7.0",
     "@types/ioredis": "^4.28.10",
     "@types/jest": "^29.5.3",
     "@types/jszip": "^3.4.0",
     "@types/mongoose": "^5.11.96",
-    "@types/node": "^18.19.87",
+    "@types/node": "^20.18.0",
     "@types/node-fetch": "^2.6.12",
     "@types/sharp": "^0.31.1",
     "@typescript-eslint/eslint-plugin": "^6.3.0",
@@ -67,6 +67,6 @@
     "typescript": "^5.1.6"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=20.18.0"
   }
 }

@@ -1,29 +1,35 @@
 import dotenv from 'dotenv';
 import path from 'path';
-
-// Load environment variables FIRST before any other imports
-dotenv.config();
-
 import { connectDB } from './db/mongoose';
 import axios from 'axios';
 import { User } from './models/User';
-import { createWebhookServer } from './webhook';
+import express from 'express';
 
-import { Telegraf, session, Markup } from 'telegraf';
+// Load environment variables first
+dotenv.config();
+
+import { Telegraf, session, Markup, Scenes } from 'telegraf';
 import { BotContext } from './types';
 import { createScenes } from './scenes';
 import { setupCallbackHandlers } from './handlers/callback.handler';
 import { OpenAIService } from './services/openai.service';
+import { FluxService } from './services/flux.service';
 import { MongoDBService } from './services/mongodb.service';
 import { StorageService } from './services/storage.service';
+// FluxService removed - using OpenAI gpt-image-1 instead
 
+import { LogoVariantService } from './services/logoVariant.service';
+import { CompleteAssetGenerationService } from './services/completeAssetGeneration.service';
+import { handleImageGenerationError } from './utils/retry';
 import { createTelegramStickerPack, addStickerToPack } from './utils/telegramStickerPack';
+import { clearUserIntervals } from './utils/intervalManager';
 import fs from 'fs';
 import { startImageWorker, imageQueue } from './utils/imageQueue';
 import { userLoader } from './middleware/userLoader';
 import i18n, { i18nMiddleware } from './middleware/i18n.middleware';
 import { sceneSessionResetMiddleware, ensureSessionCleanup } from './middleware/scene.middleware';
 import { setupLanguageCommand } from './commands/language';
+import sharp from 'sharp';
 
 const { ImageGeneration } = require('./models/ImageGeneration');
 
@@ -36,8 +42,15 @@ export async function sendMainMenu(ctx: BotContext) {
   if (ctx.dbUser) {
     balanceMsg = `\n\n*${ctx.i18n.t('welcome.star_balance')}:* ${ctx.dbUser.starBalance} ⭐`;
   }
+  
+  // Add beta testing notice if in testing mode
+  let betaNotice = '';
+  if (process.env.TESTING === 'true') {
+    betaNotice = `\n\n🧪 *BETA TESTING MODE*\n🎉 *All features are FREE during testing!*\n📝 Help us improve by sharing feedback\n\n`;
+  }
+  
   await ctx.reply(
-    `*${ctx.i18n.t('welcome.title')}*\n\n${ctx.i18n.t('welcome.what_to_do')}${balanceMsg}\n\n_${ctx.i18n.t('welcome.built_by')}_`,
+    `*${ctx.i18n.t('welcome.title')}*${betaNotice}\n${ctx.i18n.t('welcome.what_to_do')}${balanceMsg}\n\n_${ctx.i18n.t('welcome.built_by')}_`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -48,7 +61,7 @@ export async function sendMainMenu(ctx: BotContext) {
           ],
           [
             { text: ctx.i18n.t('menu.generate_stickers'), callback_data: 'generate_stickers' },
-            { text: ctx.i18n.t('menu.edit_image'), callback_data: 'edit_sticker' }
+            { text: ctx.i18n.t('menu.edit_image'), callback_data: 'edit_image' }
           ],
           [
             { text: ctx.i18n.t('menu.starter_pack'), callback_data: 'starter_pack' },
@@ -69,11 +82,31 @@ export async function sendMainMenu(ctx: BotContext) {
 
 // Initialize services
 const openaiService = new OpenAIService();
+const fluxService = new FluxService();
 const mongodbService = new MongoDBService();
 const storageService = new StorageService();
+// FluxService removed - using OpenAI gpt-image-1 instead
+const logoVariantService = new LogoVariantService(storageService, openaiService);
+const completeAssetGenerationService = new CompleteAssetGenerationService(storageService, openaiService);
 
 // Initialize the bot
 const bot = new Telegraf<BotContext>(process.env.BOT_TOKEN || '');
+
+// Dynamically resolve bot username for Telegram sticker set naming
+let RESOLVED_BOT_USERNAME: string = process.env.BOT_USERNAME || '';
+(async () => {
+  try {
+    const me = await bot.telegram.getMe();
+    if (me?.username) {
+      RESOLVED_BOT_USERNAME = me.username;
+      console.log(`[Bot] Resolved bot username: @${RESOLVED_BOT_USERNAME}`);
+    } else {
+      console.warn('[Bot] Could not resolve bot username via getMe(); falling back to env BOT_USERNAME');
+    }
+  } catch (e) {
+    console.warn('[Bot] getMe() failed; using env BOT_USERNAME if set');
+  }
+})();
 
 // Removed context boundary middleware
 
@@ -91,7 +124,7 @@ bot.use(i18nMiddleware);
 const lastStartCommand = new Map<number, number>();
 
 // Setup scenes
-const stage = createScenes(openaiService, mongodbService, storageService);
+const stage = createScenes(openaiService, fluxService, mongodbService, storageService);
 
 // Create a wrapper that will add i18n to all scene contexts
 const wrappedStage = {
@@ -102,8 +135,10 @@ const wrappedStage = {
   }
 };
 
-// Apply stage middleware only - no scene session reset middleware
+// Apply stage middleware first, then the scene session reset middleware
 bot.use(wrappedStage.middleware());
+// Register scene reset middleware after stage is registered so ctx.scene exists
+bot.use(sceneSessionResetMiddleware());
 
 // Setup callback handlers
 setupCallbackHandlers(bot, openaiService, storageService, mongodbService);
@@ -132,21 +167,6 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
         delete (ctx.session as any)[key];
       }
     }
-    
-    // Clear edit image session flags that persist outside of scenes
-    const editImageKeys = [
-      'awaitingEditPrompt',
-      'stickerEditPrompt', 
-      'awaitingStickerEdit',
-      'awaitingStarterPackImage'
-    ];
-    
-    editImageKeys.forEach(key => {
-      if ((ctx.session as any)[key]) {
-        console.log(`Force clearing edit image session flag: ${key}`);
-        delete (ctx.session as any)[key];
-      }
-    });
   }
 
   if (ctx.scene && ctx.scene.current) {
@@ -161,7 +181,7 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
       // If we can't leave gracefully, we'll still reset the session below
     }
     
-    // Completely reset session including wizard state
+    // Completely reset session
     ctx.session = { 
       __scenes: { current: null, state: {} }
     } as any;
@@ -177,30 +197,21 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
     ctx.session = { __scenes: { current: null, state: {} } } as any;
   } else {
     // Even if not in a scene, clear everything except core structure
-    // This is crucial for wizard scenes that might persist state
-    const language = ctx.i18n?.locale();
     ctx.session = { __scenes: { current: null, state: {} } } as any;
     
     // Restore language if it was set
-    if (language && ctx.i18n) {
-      ctx.i18n.locale(language);
-    }
-  }
-  
-  // Extra safety: If there's still a wizard context, reset it
-  if (ctx.wizard) {
-    try {
-      // Reset wizard cursor to beginning
-      (ctx as any).wizard.cursor = 0;
-      console.log('Reset wizard cursor to 0');
-    } catch (err) {
-      console.log('Could not reset wizard cursor:', err);
+    if (ctx.i18n) {
+      const lang = ctx.i18n.locale();
+      if (lang) {
+        ctx.i18n.locale(lang);
+      }
     }
   }
 }
 
 // Modify the bot.start handler to completely clear session data
 bot.start(async (ctx) => {
+  console.log(`[Start] /start by user=${ctx.from?.id}`);
   // Only process if this is not a duplicate command within 2 seconds
   const userId = ctx.from?.id || 0;
   const now = Date.now();
@@ -227,6 +238,19 @@ bot.start(async (ctx) => {
     } catch (error) {
       console.error('Error processing referral:', error);
     }
+  }
+  
+  // Add special beta testing welcome if in testing mode
+  if (process.env.TESTING === 'true') {
+    await ctx.reply(
+      `🧪 *Welcome to Instalogo Beta Testing!*\n\n` +
+      `🎉 You're part of our exclusive beta test group!\n` +
+      `✨ All features are completely FREE during testing\n` +
+      `📝 Your feedback helps us improve the bot\n` +
+      `🚀 Test everything - logos, memes, stickers!\n\n` +
+      `Thank you for being a beta tester! 🙏`,
+      { parse_mode: 'Markdown' }
+    );
   }
   
   // Force leave and clear any existing scene state
@@ -302,7 +326,7 @@ bot.command('referral', async (ctx) => {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.')}` }],
+              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.')}` }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
           }
@@ -329,12 +353,6 @@ bot.command('generate_stickers', async (ctx) => {
   await ctx.scene.enter('stickerWizard');
 });
 
-// Edit sticker command
-bot.command('edit_sticker', async (ctx) => {
-  await forceLeaveCurrentScene(ctx);
-  await ctx.reply(ctx.i18n.t('general.please_describe'));
-  (ctx.session as any).awaitingEditPrompt = true;
-});
 
 // Generate memes command (text trigger)
 bot.hears('Generate Memes', async (ctx) => {
@@ -345,7 +363,43 @@ bot.hears('Generate Memes', async (ctx) => {
   await ctx.scene.enter('memeWizard');
 });
 
-// NOTE: generate_memes callback handler moved to callback.handler.ts to avoid conflicts
+// New: Inline button callback handler for 'Generate Memes'
+bot.action('generate_memes', async (ctx) => {
+  await ctx.answerCbQuery();
+  await forceLeaveCurrentScene(ctx);
+  
+  // Completely reset ALL meme-related session data
+  const memeKeys = [
+    'memeImageFileId', 'memeImageSkipped', 'memeTopic', 
+    'memeAudience', 'memeMood', 'memeElements', 
+    'memeCatch', 'memeFormat', 'memeColor', 'memeStyle', 
+    'memeStyleDesc', 'memeText', 'awaitingCustomMemeStyle'
+  ];
+  
+  // Remove all meme keys and ensure no old data persists
+  if (ctx.session) {
+    // Save important system properties
+    const scenes = ctx.session.__scenes;
+    const language = ctx.i18n?.locale();
+    
+    // Reset to a clean session
+    ctx.session = { __scenes: scenes } as any;
+    
+    // Restore language
+    if (language && ctx.i18n) {
+      ctx.i18n.locale(language);
+    }
+  }
+  
+  // Show the Start Meme Flow button
+  await ctx.reply('Ready to start meme creation?', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '▶️ Start Meme Flow', callback_data: 'memes_start' }]
+      ]
+    }
+  });
+});
 
 bot.action('starter_pack', async (ctx) => {
   await ctx.answerCbQuery();
@@ -353,10 +407,10 @@ bot.action('starter_pack', async (ctx) => {
   (ctx.session as any).awaitingStarterPackImage = true;
 });
 
-bot.action('edit_sticker', async (ctx) => {
+// Edit Image Action - Start the new wizard
+bot.action('edit_image', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(ctx.i18n.t('general.please_describe'));
-  (ctx.session as any).awaitingEditPrompt = true;
+  await ctx.scene.enter('editImageWizard');
 });
 
 // In the photo handler, always reply with a debug message
@@ -406,53 +460,12 @@ bot.on('photo', async (ctx) => {
     // Clean up the file after use
     fs.unlinkSync(filePath);
     (ctx.session as any).awaitingStarterPackImage = false;
-  } else if ((ctx.session as any).awaitingStickerEdit || (ctx.session as any).stickerEditPrompt) {
-    // Handle photo for sticker editing
-    await ctx.reply(ctx.i18n.t('general.processing_image'));
-    
-    try {
-      const photo = ctx.message.photo[ctx.message.photo.length - 1];
-      const fileLink = await ctx.telegram.getFileLink(photo.file_id);
-      const response = await fetch(fileLink.href);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      
-      const userId = ctx.from.id;
-      const chatId = ctx.chat.id;
-      const prompt = (ctx.session as any).stickerEditPrompt || 'Create a beautiful sticker with transparent background';
-      
-      // Add to image queue
-      await imageQueue.add('edit-sticker', {
-        userId,
-        chatId,
-        prompt,
-        imageBuffer: buffer
-      });
-      
-      await ctx.reply(ctx.i18n.t('general.image_queued'));
-    } catch (error) {
-      console.error('Error processing image for editing:', error);
-      await ctx.reply(ctx.i18n.t('general.image_error'));
-    }
-    
-    // Reset session
-    delete (ctx.session as any).awaitingStickerEdit;
-    delete (ctx.session as any).stickerEditPrompt;
   }
 });
 
-// Handle text for edit prompt
+// Handle text commands (most text handling is now done within scenes)
 bot.on('text', async (ctx) => {
-  // Only process if we're awaiting an edit prompt
-  if ((ctx.session as any).awaitingEditPrompt) {
-    const prompt = ctx.message.text;
-    (ctx.session as any).stickerEditPrompt = prompt;
-    (ctx.session as any).awaitingEditPrompt = false;
-    (ctx.session as any).awaitingStickerEdit = true;
-    await ctx.reply('Great! Now please upload the image you want to edit into a sticker.');
-    return;
-  }
-  
-  // Keep the existing text message handling
+  // Text handling is primarily managed within individual scenes
   console.log('Received message:', ctx.message.text);
 });
 
@@ -484,18 +497,79 @@ function calculateMemeCost(quality: string): number {
   return 50; // Default
 }
 
+/**
+ * Build icon-specific prompts to make icons more distinct and prominent
+ */
+function buildIconSpecificPrompts(iconIdeas: string, brandName: string, style: string): { concept1: string; concept2: string } {
+  const iconArray = iconIdeas.toLowerCase().split(', ');
+  
+  // Categorize icons for targeted prompts
+  const techIcons = iconArray.filter(icon => 
+    icon.includes('circuit') || icon.includes('tech') || icon.includes('node') || 
+    icon.includes('shield') || icon.includes('cloud') || icon.includes('gear') || 
+    icon.includes('cog') || icon.includes('network') || icon.includes('connectivity')
+  );
+  
+  const natureIcons = iconArray.filter(icon => 
+    icon.includes('leaf') || icon.includes('plant') || icon.includes('water') || 
+    icon.includes('droplet') || icon.includes('mountain') || icon.includes('landscape') || 
+    icon.includes('animal') || icon.includes('sun') || icon.includes('energy')
+  );
+  
+  const businessIcons = iconArray.filter(icon => 
+    icon.includes('graph') || icon.includes('chart') || icon.includes('building') || 
+    icon.includes('structure') || icon.includes('handshake') || icon.includes('partnership') || 
+    icon.includes('crown') || icon.includes('award') || icon.includes('arrow') || 
+    icon.includes('direction')
+  );
+  
+  const abstractIcons = iconArray.filter(icon => 
+    icon.includes('abstract') || icon.includes('geometric') || icon.includes('pattern') || 
+    icon.includes('monogram') || icon.includes('minimalist') || icon.includes('symbol') || 
+    icon.includes('shape')
+  );
+  
+  // Build concept-specific prompts
+  let concept1 = '';
+  let concept2 = '';
+  
+  if (techIcons.length > 0) {
+    concept1 = `featuring a prominent TECH ICON with ${techIcons.join(' and ')}, modern sleek design, clean geometric lines, innovation-focused`;
+    concept2 = `with a distinctive TECH SYMBOL incorporating ${techIcons.join(' and ')}, cutting-edge aesthetic, precision engineering visual`;
+  } else if (natureIcons.length > 0) {
+    concept1 = `featuring a distinctive NATURE ICON with ${natureIcons.join(' and ')}, organic flowing design, natural curves, sustainability-focused`;
+    concept2 = `with a prominent NATURE SYMBOL incorporating ${natureIcons.join(' and ')}, botanical elements, earth-inspired shapes`;
+  } else if (businessIcons.length > 0) {
+    concept1 = `featuring a professional BUSINESS ICON with ${businessIcons.join(' and ')}, authoritative design, corporate aesthetics, success-focused`;
+    concept2 = `with a distinctive BUSINESS SYMBOL incorporating ${businessIcons.join(' and ')}, structured elements, professional symbolism`;
+  } else if (abstractIcons.length > 0) {
+    concept1 = `featuring a unique ABSTRACT ICON with ${abstractIcons.join(' and ')}, creative geometric design, bold shapes, memorable visual`;
+    concept2 = `with a distinctive ABSTRACT SYMBOL incorporating ${abstractIcons.join(' and ')}, creative geometry, distinctive visual elements`;
+  } else {
+    // Generic icon handling
+    concept1 = `featuring a prominent ICON with ${iconIdeas.toLowerCase()}, distinctive design, strong visual impact`;
+    concept2 = `with a distinctive SYMBOL incorporating ${iconIdeas.toLowerCase()}, unique visual elements, memorable design`;
+  }
+  
+  // Add icon prominence requirements
+  concept1 += ', icon must be DOMINANT VISUAL ELEMENT, bold and immediately recognizable';
+  concept2 += ', symbol must be PROMINENT FEATURE, scalable and impactful';
+  
+  return { concept1, concept2 };
+}
+
 // Start the bot
 const startBot = async () => {
   console.log('startBot function is running...');
   try {
-    // Check if Cloudinary is configured and accessible
+    // Check if LocalStack is running by ensuring the S3 bucket exists
     try {
       await storageService.ensureBucketExists();
-      console.log('✅ Cloudinary is configured and ready for image storage');
+      console.log('LocalStack is running and bucket is ready');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn('❌ Cloudinary may not be available:', errorMessage);
-      console.warn('⚠️ Continuing anyway, but image storage operations may fail');
+      console.warn('LocalStack may not be available:', errorMessage);
+      console.warn('Continuing anyway, but S3 storage operations may fail');
     }
     
     // Start the image generation worker
@@ -510,6 +584,9 @@ const startBot = async () => {
         try {
           console.log(`[ImageWorker] Starting job: ${job.id} (${name})`);
           if (name === 'generate-logo') {
+            // Create consistent timestamp for this generation
+            const generationTimestamp = Date.now();
+            
             // Get parameters from job data
             const freeGenerationUsed = job.data.freeGenerationUsed || false;
             const cost = job.data.cost !== undefined ? job.data.cost : (!freeGenerationUsed ? 0 : 50);
@@ -527,38 +604,156 @@ const startBot = async () => {
             let finalPrompts: string[] = [];
             let dspyResults: any[] = [];
             
-            // Always use basic prompt generation
-            console.log(`[ImageWorker] 📝 Using basic prompt generation...`);
+            // Always use comprehensive prompt generation with ALL user selections
+            console.log(`[ImageWorker] 📝 Using comprehensive prompt generation with OpenAI gpt-image-1...`);
+            
+            // Extract and format all user selections
+            const brandName = session.name || 'your brand';
+            const tagline = session.tagline && session.tagline !== 'skip' ? `Tagline: "${session.tagline}".` : '';
+            const industry = session.mission || 'Business';
+            const vibe = Array.isArray(session.vibe) ? session.vibe.join(', ') : session.vibe || 'Professional';
+            const audience = Array.isArray(session.audience) ? session.audience.join(', ') : session.audience || 'General audience';
+            const style = Array.isArray(session.stylePreferences) ? session.stylePreferences.join(', ') : session.stylePreferences || 'Modern';
+            const colors = Array.isArray(session.colorPreferences) ? session.colorPreferences.join(', ') : session.colorPreferences || 'Professional palette';
+            const typography = Array.isArray(session.typography) ? session.typography.join(', ') : session.typography || 'Clean';
+            const iconIdeas = Array.isArray(session.iconIdea) ? session.iconIdea.join(', ') : session.iconIdea || 'Abstract symbol';
+            const inspiration = session.inspiration && session.inspiration !== 'skip' ? `Inspired by: ${session.inspiration}.` : '';
+            const notes = session.finalNotes && session.finalNotes !== 'skip' ? `Special requirements: ${session.finalNotes}.` : '';
+            
+            // Log comprehensive session data for debugging
+            console.log(`[ImageWorker] Session data: Brand=${brandName}, Industry=${industry}, Vibe=${vibe}, Audience=${audience}, Style=${style}, Colors=${colors}, Typography=${typography}, Icons=${iconIdeas}`);
+            
+            // Enhanced icon-specific prompts for more distinct icon generation
+            const iconSpecificPrompts = buildIconSpecificPrompts(iconIdeas, brandName, style);
+            
+            // Build comprehensive brand context for each concept
+            const brandContext = [
+              `=== BRAND IDENTITY ===`,
+              `Brand Name: "${brandName}"`,
+              tagline ? `Tagline/Slogan: "${tagline}"` : '',
+              `Industry/Mission: ${industry}`,
+              `Brand Vibe: ${vibe}`,
+              `Target Audience: ${audience}`,
+              `Visual Style: ${style}`,
+              `Color Palette: ${colors}`,
+              `Typography: ${typography}`,
+              `Icon Elements: ${iconIdeas}`,
+              inspiration ? `Design Inspiration: ${inspiration}` : '',
+              notes ? `Special Requirements: ${notes}` : '',
+              ''
+            ].filter(Boolean).join('\n');
+
+            const technicalRequirements = [
+              `=== TECHNICAL REQUIREMENTS ===`,
+              `Format: High-quality PNG with transparent background`,
+              `Background: TRANSPARENT BACKGROUND ONLY, no background color, PNG with alpha channel`,
+              `Composition: Isolated logo elements, clear background, transparent backdrop`,
+              `Scalability: Vector-style design that works at all sizes`,
+              `Compatibility: Works on both light and dark backgrounds`,
+              `Quality: Professional industry standards`,
+              ''
+            ].join('\n');
+
+            const designObjectives = [
+              `=== DESIGN OBJECTIVES ===`,
+              `1. Create a memorable and unique visual identity that stands out from competitors`,
+              `2. Ensure the logo reflects the brand identity, values, and personality described above`,
+              `3. Design with clear visual hierarchy and proper spacing for optimal readability`,
+              `4. Use colors and typography that convey the right emotions and industry standards`,
+              `5. Ensure the logo is instantly recognizable and works well at different sizes`,
+              `6. Follow professional design principles with appropriate contrast and legibility`,
+              `7. Create a timeless design that will remain relevant and effective over time`,
+              ''
+            ].join('\n');
+            
             finalPrompts = [
-              `Create a professional, minimalist logo for ${session.name}. ${session.tagline ? `Tagline: ${session.tagline}.` : ''} Style: Modern, clean, scalable. Industry: ${session.mission || 'Business'}. Colors: ${session.colorPreferences || 'Professional palette'}. Make it distinctive and memorable.`,
-              `Design a bold, symbolic logo for ${session.name}. ${session.tagline ? `Tagline: ${session.tagline}.` : ''} Style: Iconic, strong visual impact. Industry: ${session.mission || 'Business'}. Colors: ${session.colorPreferences || 'Professional palette'}. Focus on symbolism and brand recognition.`
+              // Concept 1: Enhanced icon prominence with comprehensive context
+              [
+                brandContext,
+                `=== CONCEPT 1: ICON-FOCUSED DESIGN ===`,
+                `Design Approach: ${iconSpecificPrompts.concept1}`,
+                technicalRequirements,
+                designObjectives,
+                `=== FINAL INSTRUCTION ===`,
+                `Generate a professional logo for ${brandName} that incorporates ALL the above context, preferences, and requirements. Focus on creating a distinctive icon that represents the brand effectively.`
+              ].join('\n'),
+               
+              // Concept 2: Alternative with enhanced icon focus and comprehensive context
+              [
+                brandContext,
+                `=== CONCEPT 2: ALTERNATIVE DESIGN APPROACH ===`,
+                `Design Approach: ${iconSpecificPrompts.concept2}`,
+                `Style Emphasis: ${style.toLowerCase()} style with enhanced visual impact`,
+                technicalRequirements,
+                designObjectives,
+                `=== FINAL INSTRUCTION ===`,
+                `Generate a distinctive logo for ${brandName} that incorporates ALL the above context, preferences, and requirements. Create an alternative design approach that showcases different visual possibilities.`
+              ].join('\n')
             ];
             
             if (!session.generatedLogos) session.generatedLogos = [];
             
-            // Generate each logo separately with its own prompt
+            // Generate each logo separately with its own prompt and seed
+            const generatedLogos: Array<{url: string, seed: number, prompt: string}> = [];
+            
             for (let idx = 0; idx < finalPrompts.length; idx++) {
               const logoPrompt = finalPrompts[idx];
               console.log(`[ImageWorker] Generating logo ${idx + 1} with prompt: ${logoPrompt.substring(0, 100)}...`);
               
-              const imageB64s = await openaiService.generateImageWithOpenAI({
-                prompt: logoPrompt,
-                n: 1, // Generate only 1 image per prompt to avoid multiple logos in one image
-                size: '1024x1024',
-                model: 'gpt-image-1',
-                userId,
-                userBalance,
-                sessionId: session?.sessionId,
-                generationType: 'logo',
-                freeGeneration: !freeGenerationUsed,
-              });
+              try {
+                // Use OpenAI service for logo generation with retry logic
+                const openaiResult = await openaiService.generateLogoImages({
+                  prompt: logoPrompt,
+                  userId: userId,
+                  sessionId: session?.sessionId,
+                  freeGeneration: idx === 0 && !freeGenerationUsed
+                });
+                
+                console.log(`[ImageWorker] Generated logo ${idx + 1} with OpenAI`);
+                
+                // Check if image data exists and is valid
+                if (!openaiResult || openaiResult.length === 0) {
+                  console.error(`[ImageWorker] No image data returned for logo ${idx + 1}`);
+                  continue; // Skip this logo and continue with the next one
+                }
               
-              const buffer = Buffer.from(imageB64s[0], 'base64');
+              // Get the first image URL from OpenAI result
+              const imageUrl = openaiResult[0];
+              if (!imageUrl || typeof imageUrl !== 'string') {
+                console.error(`[ImageWorker] Invalid image URL for logo ${idx + 1}:`, typeof imageUrl);
+                continue; // Skip this logo
+              }
+              
+              // Handle both base64 data URLs and direct URLs
+              let imageBuffer: Buffer;
+              if (imageUrl.startsWith('data:')) {
+                // Base64 data URL
+                imageBuffer = Buffer.from(imageUrl.split(',')[1], 'base64');
+              } else {
+                // Direct URL - fetch the image
+                try {
+                  const response = await fetch(imageUrl);
+                  const arrayBuffer = await response.arrayBuffer();
+                  imageBuffer = Buffer.from(arrayBuffer);
+                } catch (fetchError) {
+                  console.error(`[ImageWorker] Error fetching image from URL:`, fetchError);
+                  continue; // Skip this logo
+                }
+              }
               const logoSet: Record<string, string> = {};
               
-              // Create multiple sizes for each logo
+              // Create multiple sizes for each logo (OpenAI gpt-image-1 generates transparent PNGs natively)
               for (const size of allSizes) {
-                const resized = await sharp(buffer).resize(size, size).png().toBuffer();
+                // Simply resize the image - OpenAI gpt-image-1 already generates transparent PNGs
+                const resized = await sharp(imageBuffer)
+                  .resize(size, size)
+                  .png({ 
+                    quality: 100,
+                    compressionLevel: 0,
+                    adaptiveFiltering: false,
+                    force: true // Force PNG output
+                  })
+                  .toBuffer();
                 const storedUrl = await storageService.uploadBuffer(resized, {
                   key: `logos/${session?.name?.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}-${idx}-${size}.png`,
                   contentType: 'image/png'
@@ -566,41 +761,128 @@ const startBot = async () => {
                 logoSet[size] = storedUrl;
               }
               
+              // Store the main logo URL (no seed for OpenAI gpt-image-1)
+              generatedLogos.push({
+                url: logoSet['1024'],
+                seed: undefined, // OpenAI gpt-image-1 doesn't support seeds
+                prompt: logoPrompt
+              });
+              
               session.generatedLogos.push(logoSet);
               
               // Send logo with basic concept description
               const conceptDescription = `Logo Concept ${idx + 1}`;
               const caption = `${conceptDescription}\n\n${cost === 0 ? '(Free)' : `(${cost} stars)`}`;
               
-              await bot.telegram.sendPhoto(chatId, { source: buffer }, { 
-                caption,
+              // Process image for preview (OpenAI gpt-image-1 generates transparent PNGs natively)
+              const previewBuffer = await sharp(imageBuffer)
+                .png({ 
+                  quality: 100,
+                  compressionLevel: 0,
+                  adaptiveFiltering: false,
+                  force: true
+                })
+                .toBuffer();
+              
+              // Send preview as photo
+              await bot.telegram.sendPhoto(chatId, { source: previewBuffer }, { 
+                caption: `📸 Preview: ${caption}`,
                 reply_markup: {
                   inline_keyboard: [
                     [
-                      { text: '👍 Like', callback_data: `feedback_like_${userId}_${Date.now()}_${idx}` },
-                      { text: '👎 Dislike', callback_data: `feedback_dislike_${userId}_${Date.now()}_${idx}` }
+                      { text: '👍 Like', callback_data: `feedback_like_${userId}_${generationTimestamp}_${idx}` },
+                      { text: '👎 Dislike', callback_data: `feedback_dislike_${userId}_${generationTimestamp}_${idx}` }
                     ],
                     [
-                      { text: '📥 Download HD', callback_data: `download_logo_${idx}` },
+                      { text: '✅ Select This Logo', callback_data: `select_logo_${userId}_${generationTimestamp}_${idx}` },
                       { text: '🔄 Regenerate', callback_data: `regenerate_logo_${idx}` }
                     ]
                   ]
                 }
               });
               
-              // Create DB record for the logo
-              try {
-                console.log(`[ImageWorker] Creating ImageGeneration record for userId: ${userId}, type: logo, cost: ${idx === 0 ? cost : 0}, imageUrl: ${logoSet['1024']}`);
-                const imageGen = await ImageGeneration.create({
-                  userId,
-                  type: 'logo',
-                  cost: idx === 0 ? cost : 0, // Only charge for the first logo
-                  imageUrl: logoSet['1024'],
-                });
-                console.log(`[ImageWorker] Successfully created ImageGeneration record with ID: ${imageGen._id}`);
-              } catch (dbError) {
-                console.error(`[ImageWorker] Error creating ImageGeneration record:`, dbError);
+              // Send processed PNG as document for download
+              await bot.telegram.sendDocument(chatId, { 
+                source: previewBuffer, 
+                filename: `${session?.name?.replace(/\s+/g, '-').toLowerCase() || 'logo'}-concept-${idx + 1}.png` 
+              }, { 
+                caption: `📥 Download: ${conceptDescription} (PNG Format)\n\nHigh-quality PNG with transparent background - perfect for professional use!`,
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: '📥 Download All Variants', callback_data: `download_all_variants_${userId}_${Date.now()}_${idx}` }
+                    ]
+                  ]
+                }
+              });
+              
+              } catch (logoError) {
+                console.error(`[ImageWorker] Error generating logo ${idx + 1}:`, logoError);
+                
+                // Send user-friendly error message
+                const errorMessage = handleImageGenerationError(logoError, `Logo ${idx + 1} generation`);
+                await bot.telegram.sendMessage(chatId, 
+                  `❌ ${errorMessage}\n\nContinuing with other logos...`
+                );
+                
+                // Continue with next logo instead of failing completely
+                continue;
               }
+            }
+            
+            // Check if we have any successful logos
+            if (generatedLogos.length === 0) {
+              console.error(`[ImageWorker] No logos were generated successfully for user ${userId}`);
+              await bot.telegram.sendMessage(chatId, 
+                '❌ Sorry, all logo generation attempts failed. This might be due to network issues or service problems. Please try again later.'
+              );
+              
+              // Clear intervals and exit
+              clearUserIntervals(userId);
+              return;
+            }
+            
+            // Store generation data with seeds for variant generation
+            const generationData = {
+              userId,
+              sessionId: session?.sessionId,
+              originalPrompt: finalPrompts[0], // Store first prompt as base
+              selectedImageIndex: 0, // Will be updated when user selects
+              brandName: session?.name,
+              seeds: generatedLogos.map(logo => logo.seed), // Store all seeds
+              prompts: generatedLogos.map(logo => logo.prompt) // Store all prompts
+            };
+            
+            // Store in session for variant generation
+            (session as any).generationData = generationData;
+            
+            // Store in database with seed information and API cost
+            try {
+            const createdLogoGen = await ImageGeneration.create({
+                userId,
+                type: 'logo',
+              cost,
+              imageUrl: generatedLogos[0].url, // Store first logo URL
+              apiProvider: 'openai',
+              apiModel: openaiService.lastModel || undefined,
+              apiCostUsd: openaiService.lastCallCostUsd || 0,
+              apiUsage: openaiService.lastCallUsage || undefined,
+              originalPrompt: finalPrompts[0],
+              selectedImageIndex: 0,
+              seed: generatedLogos[0].seed, // Store first seed
+              timestamp: new Date(generationTimestamp), // Use consistent timestamp
+              generationMetadata: {
+                brandName: session?.name,
+                sessionId: session?.sessionId,
+                isVariant: false,
+                allSeeds: generatedLogos.map(logo => logo.seed),
+                allPrompts: generatedLogos.map(logo => logo.prompt),
+                generationTimestamp: generationTimestamp // Store for callback data
+              }
+            });
+            console.log(`[DB] Logo generation saved _id=${createdLogoGen._id} apiCostUsd=$${(createdLogoGen.apiCostUsd||0).toFixed(6)} provider=${createdLogoGen.apiProvider}`);
+            } catch (dbErr) {
+              console.error('[DB] Failed to save logo ImageGeneration:', dbErr);
             }
             
             // Update the user's status if needed
@@ -640,16 +922,29 @@ const startBot = async () => {
               }
             }
             
-            // Store all logo sets in MongoDB for this user
-            try {
-              console.log(`[ImageWorker] Storing ${session.generatedLogos?.length || 0} logo sets in UserImages for userId: ${userId}`);
-              await mongodbService.setUserLogos(userId, session.generatedLogos);
-              console.log(`[ImageWorker] Successfully stored logo sets in UserImages`);
-            } catch (dbError) {
-              console.error(`[ImageWorker] Error storing logo sets in UserImages:`, dbError);
+            // Check if we have any successful logos
+            if (generatedLogos.length === 0) {
+              console.error(`[ImageWorker] No logos were generated successfully for user ${userId}`);
+              await bot.telegram.sendMessage(chatId, 
+                '❌ Sorry, all logo generation attempts failed. This might be due to network issues or service problems. Please try again later.'
+              );
+              
+              // Clear intervals and exit
+              clearUserIntervals(userId);
+              return;
             }
             
-            console.log(`[ImageWorker] Completed job: ${job.id} (generate-logo)`);
+            // Store all logo sets in MongoDB for this user
+            await mongodbService.setUserLogos(userId, session.generatedLogos);
+            
+            console.log(`[ImageWorker] Completed job: ${job.id} (generate-logo) - ${generatedLogos.length} logos generated`);
+            
+            // Logos are already sent immediately during generation above
+            // No need to send them again here - this was causing duplicate/wrong images
+            console.log(`[ImageWorker] Logo generation completed for user ${userId} - logos already sent during generation`);
+            
+            // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
+            clearUserIntervals(userId);
           } else if (name === 'generate-meme') {
             // Get parameters from job data
             const freeGenerationUsed = job.data.freeGenerationUsed || false;
@@ -666,47 +961,22 @@ const startBot = async () => {
               const user = await User.findOne({ userId });
               const userBalance = user?.starBalance || 0;
               
-              // Use basic meme prompt generation
-              console.log(`[ImageWorker] 📝 Using basic meme prompt generation...`);
-              
-              // Build basic meme prompt from session data
-              finalPrompt = prompt; // Use the prompt built in the meme wizard
-              
-              console.log(`[ImageWorker] ✅ Basic meme prompt ready!`);
-              
-              if (job.data.imageBuffer) {
-                // Use image+prompt API with basic prompt
-                const response = await openaiService.generateImage({
-                  prompt: finalPrompt,
-                  image: job.data.imageBuffer,
-                  model: 'gpt-image-1',
-                  size: '1024x1024',
-                  response_format: 'b64_json',
-                  userId,
-                  userBalance,
-                  sessionId: session?.sessionId,
-                  generationType: 'meme',
-                });
-                // The response may have .data[0].b64_json
-                const b64 = response.data && response.data[0] && response.data[0].b64_json;
-                if (!b64) throw new Error('No image returned from OpenAI image+prompt API');
-                buffer = Buffer.from(b64, 'base64');
-              } else {
-                // Use prompt-only API with basic prompt
-                console.log(`[ImageWorker] Generating meme with basic prompt: ${finalPrompt.substring(0, 100)}...`);
-                const imageB64s = await openaiService.generateImageWithOpenAI({
-                  prompt: finalPrompt,
-                  n: 1,
-                  size: '1024x1024',
-                  model: 'gpt-image-1',
-                  userId,
-                  userBalance,
-                  sessionId: session?.sessionId,
-                  generationType: 'meme',
-                  freeGeneration: !freeGenerationUsed,
-                });
-                buffer = Buffer.from(imageB64s[0], 'base64');
+              // Build prompt from wizard and use FLUX for generation
+              finalPrompt = prompt;
+              console.log(`[ImageWorker] 🎛 Using FLUX for meme generation...`);
+              const memeUrls = await fluxService.generateMemes({
+                prompt: finalPrompt,
+                count: 1,
+                userId,
+                sessionId: session?.sessionId,
+                generationType: 'meme'
+              });
+              if (!memeUrls || memeUrls.length === 0) {
+                throw new Error('No memes returned from FLUX');
               }
+              // Download first meme URL to buffer
+              const memeResp = await axios.get(memeUrls[0], { responseType: 'arraybuffer' });
+              buffer = Buffer.from(memeResp.data as ArrayBuffer);
               
               const memeUrl = await storageService.uploadBuffer(buffer, {
                 key: `memes/meme-${userId}-${Date.now()}.png`,
@@ -714,14 +984,24 @@ const startBot = async () => {
               });
 
               
-              // Create DB record for the meme
-              const imageGen = await ImageGeneration.create({
+              // Create DB record for the meme with API cost logging
+              let imageGen: any;
+              try {
+              imageGen = await ImageGeneration.create({
                 userId,
                 type: 'meme',
                 quality,
                 cost,
                 imageUrl: memeUrl,
+                apiProvider: 'flux',
+                apiModel: fluxService.lastModel || undefined,
+                apiCostUsd: fluxService.lastCallCostUsd || 0,
+                apiUsage: undefined,
               });
+              console.log(`[DB] Meme generation saved _id=${imageGen._id} apiCostUsd=$${(imageGen.apiCostUsd||0).toFixed(6)} provider=${imageGen.apiProvider}`);
+              } catch (dbErr) {
+                console.error('[DB] Failed to save meme ImageGeneration:', dbErr);
+              }
               
               // Update the user's status if needed
               if (job.data.updateUser) {
@@ -785,9 +1065,15 @@ const startBot = async () => {
               });
               
               console.log(`[ImageWorker] ✅ Meme sent successfully to user ${userId}!`);
+              
+              // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
+              clearUserIntervals(userId);
             } catch (error) {
               console.error(`[ImageWorker] Error in meme generation:`, error);
               await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your meme. Please try again.');
+              
+              // 🧹 CLEAR INTERVALS EVEN ON ERROR
+              clearUserIntervals(userId);
             }
           } else if (name === 'generate-sticker') {
             // Calculate cost based on sticker count and free generation status
@@ -814,49 +1100,98 @@ const startBot = async () => {
             
             const stickerDir = path.join(__dirname, '../stickers');
             if (!fs.existsSync(stickerDir)) fs.mkdirSync(stickerDir, { recursive: true });
-            for (let i = 0; i < count; i++) {
-              try {
-                const variationPrompt = `${prompt} (variation ${i + 1})`;
-                const imageB64s = await openaiService.generateImageWithOpenAI({
-                  prompt: variationPrompt,
-                  n: 1,
-                  model: 'gpt-image-1',
-                  userId,
-                  userBalance,
-                  sessionId: session?.sessionId,
-                  generationType: 'sticker',
-                  freeGeneration: i === 0 && !freeGenerationUsed,
-                });
-                const buffer = Buffer.from(imageB64s[0], 'base64');
-                const localStickerPath = path.join(stickerDir, `sticker-${userId}-${Date.now()}-${i}.png`);
-                fs.writeFileSync(localStickerPath, buffer);
-                const stickerUrl = await storageService.uploadBuffer(buffer, {
-                  key: `stickers/sticker-${userId}-${Date.now()}-${i}.png`,
-                  contentType: 'image/png'
-                });
-                // Always create the DB record here for this sticker, include the actual cost per sticker
-                const stickerCost = i === 0 && !freeGenerationUsed ? 0 : costPerSticker;
-                const imageGen = await ImageGeneration.create({
-                  userId,
-                  type: 'sticker',
-                  cost: stickerCost,
-                  imageUrl: stickerUrl,
-                  localPath: localStickerPath,
-                });
-                await bot.telegram.sendPhoto(chatId, { source: buffer }, {
-                  caption: i === 0 ? `Here is your generated sticker! ${stickerCost === 0 ? '(Free)' : `(${stickerCost} stars)`}` : `Sticker #${i+1} (${stickerCost} stars)`,
-                  reply_markup: {
-                    inline_keyboard: [
-                      [
-                        { text: 'Select for Pack', callback_data: `toggle_select_sticker_${imageGen._id}` }
-                      ]
-                    ]
-                  }
-                });
-              } catch (error) {
-                console.error(`[ImageWorker] Error generating sticker ${i + 1}:`, error);
-                await bot.telegram.sendMessage(chatId, `Sorry, there was an error generating sticker ${i + 1}. Continuing with others...`);
+            
+            try {
+              console.log(`[ImageWorker] Generating ${count} stickers with FLUX via Replicate...`);
+              
+              // Generate all stickers in batches using FLUX
+              const stickerUrls = await fluxService.generateStickers({
+                prompt: prompt,
+                count: count,
+                userId: userId,
+                sessionId: session?.sessionId,
+                generationType: 'sticker'
+              });
+              
+              // Validate sticker URLs
+              if (!stickerUrls || stickerUrls.length === 0) {
+                throw new Error('No stickers returned from FLUX');
               }
+              
+              console.log(`[ImageWorker] FLUX generated ${stickerUrls.length} stickers`);
+              
+              // Process each generated sticker
+              for (let i = 0; i < stickerUrls.length; i++) {
+                try {
+                  // Download sticker from Replicate URL
+                  const response = await axios.get(stickerUrls[i], { responseType: 'arraybuffer' });
+                  const buffer = Buffer.from(response.data as ArrayBuffer);
+                  
+                  const localStickerPath = path.join(stickerDir, `sticker-${userId}-${Date.now()}-${i}.png`);
+                  fs.writeFileSync(localStickerPath, buffer);
+                  
+                  const stickerUrl = await storageService.uploadBuffer(buffer, {
+                    key: `stickers/sticker-${userId}-${Date.now()}-${i}.png`,
+                    contentType: 'image/png'
+                  });
+                  
+                  // Calculate cost per sticker
+                  const stickerCost = i === 0 && !freeGenerationUsed ? 0 : costPerSticker;
+                  
+                  // Create DB record for this sticker with API cost logging
+                  let imageGen: any;
+                  try {
+                  imageGen = await ImageGeneration.create({
+                    userId,
+                    type: 'sticker',
+                    cost: stickerCost,
+                    imageUrl: stickerUrl,
+                    localPath: localStickerPath,
+                    apiProvider: 'flux',
+                    apiModel: fluxService.lastModel || undefined,
+                    apiCostUsd: fluxService.lastCallCostUsd || 0,
+                    apiUsage: undefined,
+                  });
+                  console.log(`[DB] Sticker generation saved _id=${imageGen._id} apiCostUsd=$${(imageGen.apiCostUsd||0).toFixed(6)} provider=${imageGen.apiProvider}`);
+                  } catch (dbErr) {
+                    console.error('[DB] Failed to save sticker ImageGeneration:', dbErr);
+                  }
+                  
+                  // Send sticker to user
+                  await bot.telegram.sendPhoto(chatId, { source: buffer }, {
+                    caption: i === 0 ? `Here is your generated sticker! ${stickerCost === 0 ? '(Free)' : `(${stickerCost} stars)`}` : `Sticker #${i+1} (${stickerCost} stars)`,
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          { text: 'Select for Pack', callback_data: `toggle_select_sticker_${imageGen._id}` }
+                        ]
+                      ]
+                    }
+                  });
+                  
+                } catch (stickerError) {
+                  console.error(`[ImageWorker] Error processing sticker ${i + 1}:`, stickerError);
+                  await bot.telegram.sendMessage(chatId, `Sorry, there was an error processing sticker ${i + 1}. Continuing with others...`);
+                }
+              }
+              
+              // Prompt user to finish selection and create sticker pack
+              try {
+                await bot.telegram.sendMessage(chatId, 
+                  'Tap "Select for Pack" on any stickers you want to include, then press Finish:',
+                  {
+                    reply_markup: {
+                      inline_keyboard: [[{ text: '✅ Finish & Create Pack', callback_data: 'finish_add_stickers' }]]
+                    }
+                  }
+                );
+              } catch (postMsgErr) {
+                console.error('Error sending finish selection prompt:', postMsgErr);
+              }
+              
+            } catch (error) {
+              console.error(`[ImageWorker] Error generating stickers with FLUX:`, error);
+              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your stickers. Please try again later.');
             }
             
             // Update user balance and free generation status
@@ -869,10 +1204,12 @@ const startBot = async () => {
                     console.log(`[ImageWorker] Marked free generation as used for user ${userId}`);
                   }
                   
-                  if (totalCost > 0) {
+                  if (totalCost > 0 && process.env.TESTING !== 'true') {
                     console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
                     user.starBalance -= totalCost;
                     console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
+                  } else if (process.env.TESTING === 'true') {
+                    console.log(`[ImageWorker] Testing mode: Skipping balance deduction for user ${userId}. Cost would be: ${totalCost}`);
                   }
                   
                   await user.save();
@@ -897,46 +1234,36 @@ const startBot = async () => {
             }
             
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-sticker)`);
-          } else if (name === 'edit-sticker') {
-            const { prompt, imageBuffer } = job.data;
-            console.log(`[ImageWorker] Editing image for sticker with prompt: ${prompt}`);
             
-            try {
-              // Process the uploaded image with OpenAI
-              const editedImageB64 = await openaiService.editImageForSticker({
-                image: imageBuffer,
-                prompt: `${prompt}. Make this a sticker with a transparent background.`
-              });
-              
-              // Convert to buffer and send back to user
-              const buffer = Buffer.from(editedImageB64, 'base64');
-              await bot.telegram.sendPhoto(chatId, { source: buffer }, { 
-                caption: 'Here is your edited sticker image!' 
-              });
-              
-              console.log(`[ImageWorker] Completed job: ${job.id} (edit-sticker)`);
-            } catch (error) {
-              console.error('[ImageWorker] Error processing edited sticker:', error);
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error creating your sticker. Please try again.');
-            }
+            // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
+            clearUserIntervals(userId);
           }
         } catch (error) {
           console.error(`[ImageWorker] Error in job ${job.id}:`, error);
           
-          // Clear any "still working" intervals when job fails
+          // Clear intervals to prevent hanging
+          clearUserIntervals(userId);
+          
           try {
-            // Try to notify user of job failure
-            if (name === 'generate-logo') {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your logo. Please try again.');
-            } else if (name === 'generate-meme') {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your meme. Please try again.');
-            } else if (name === 'generate-sticker') {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your stickers. Please try again.');
-            } else {
-              await bot.telegram.sendMessage(chatId, 'Sorry, there was an error processing your request. Please try again.');
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            let userMessage = 'Sorry, there was an error processing your request. Please try again.';
+            
+            // Provide specific error messages for common issues
+            if (errorMessage.includes('timeout')) {
+              userMessage = '⏰ Request timed out. This can happen with slow networks. Please try again.';
+            } else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+              userMessage = '🌐 Network error occurred. Please check your connection and try again.';
+            } else if (errorMessage.includes('ENOENT') || errorMessage.includes('file')) {
+              userMessage = '📁 File access error. Please try generating new content.';
+            } else if (errorMessage.includes('insufficient')) {
+              userMessage = '💰 Insufficient balance. Please buy more stars to continue.';
+            } else if (errorMessage.includes('ENOMEM') || errorMessage.includes('memory')) {
+              userMessage = '🧠 Server is under heavy load. Please try again in a few minutes.';
             }
-          } catch (notifyError) {
-            console.error(`[ImageWorker] Could not notify user of job failure:`, notifyError);
+            
+            await bot.telegram.sendMessage(chatId, userMessage);
+          } catch (notificationError) {
+            console.error('[ImageWorker] Error sending error notification:', notificationError);
           }
         }
       });
@@ -947,35 +1274,106 @@ const startBot = async () => {
     console.log('About to launch bot...');
     // Set the bot's description (shown above the START button) and short description
     await bot.telegram.setMyDescription(
-      '🚀 Instalogo Bot 🤖\n'
+      '🚀 BrandForge Bot 🤖\n'
       + 'AI Logo & Branding\n'
+      + '�� Blockchain-ready\n'
       + '✨ SuperAgent Labs'
     );
-    await bot.telegram.setMyShortDescription('Instalogo Bot — AI Crypto Logo');
+    const shortDescription = process.env.TESTING === 'true'
+      ? '🧪 BETA - Instalogo Bot — FREE AI Logo Generator'
+      : 'BrandForge Bot — AI Crypto Logo';
+      
+    await bot.telegram.setMyShortDescription(shortDescription);
     
-    // Deployment mode switching: webhook for production, polling for development
+    // Check if we're in production with webhook URL
     const isProduction = process.env.NODE_ENV === 'production';
     const webhookUrl = process.env.WEBHOOK_URL;
-    
+    const port = parseInt(process.env.PORT || '3000', 10);
+
     if (isProduction && webhookUrl) {
-      // Production mode: Use webhooks (recommended for Render deployment)
       console.log('🌐 Starting in WEBHOOK mode (production)');
       
-      try {
-        const webhookServer = createWebhookServer(bot);
-        await webhookServer.setWebhook(webhookUrl);
-        await webhookServer.startServer();
-        console.log('✅ Webhook server started successfully');
-      } catch (err) {
-        console.error('❌ Webhook setup failed, falling back to polling:', err);
-        // Fallback to polling if webhook fails
-        await bot.launch();
-        console.log('🔄 Bot launched with polling fallback');
-      }
-    } else {
-      // Development mode: Use long polling (easier for local development)
-      console.log('📡 Starting in POLLING mode (development)');
+      // Create Express app for webhook
+      const app = express();
+      app.use(express.json());
       
+      // Health check endpoint
+      app.get('/health', async (req, res) => {
+        try {
+          const botInfo = await bot.telegram.getMe();
+          res.json({
+            status: 'healthy',
+            bot: {
+              username: botInfo.username,
+              id: botInfo.id,
+              first_name: botInfo.first_name
+            },
+            server: {
+              uptime: process.uptime(),
+              timestamp: new Date().toISOString()
+            }
+          });
+        } catch (error) {
+          res.status(503).json({
+            status: 'unhealthy',
+            error: error instanceof Error ? error.message : 'Unknown error',
+            timestamp: new Date().toISOString()
+          });
+        }
+      });
+      
+      // Webhook endpoint
+      app.post(`/webhook/${process.env.BOT_TOKEN}`, (req, res) => {
+        try {
+          bot.handleUpdate(req.body, res);
+        } catch (error) {
+          console.error('Webhook error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      });
+      
+      // Root endpoint
+      app.get('/', (req, res) => {
+        res.json({
+          status: 'ok',
+          service: 'Instalogo Bot',
+          mode: 'webhook',
+          timestamp: new Date().toISOString()
+        });
+      });
+      
+      // Set webhook with verification
+      try {
+        const webhookResult = await bot.telegram.setWebhook(webhookUrl);
+        console.log(`✅ Webhook set to: ${webhookUrl}`);
+        console.log('Webhook result:', webhookResult);
+        
+        // Verify webhook was actually set
+        setTimeout(async () => {
+          try {
+            const webhookInfo = await bot.telegram.getWebhookInfo();
+            console.log('Webhook verification:', webhookInfo);
+            if (!webhookInfo.url) {
+              console.error('⚠️ WARNING: Webhook URL is empty - attempting to set again');
+              await bot.telegram.setWebhook(webhookUrl);
+            }
+          } catch (verifyError) {
+            console.error('Error verifying webhook:', verifyError);
+          }
+        }, 2000);
+        
+        // Start Express server
+        app.listen(port, () => {
+          console.log(`🚀 Webhook server running on port ${port}`);
+        });
+        
+      } catch (error) {
+        console.error('❌ Failed to set webhook:', error);
+        throw error;
+      }
+      
+    } else {
+      console.log('📡 Starting in POLLING mode (development)');
       try {
         await bot.launch();
         console.log('✅ Bot launched with polling');
@@ -985,15 +1383,9 @@ const startBot = async () => {
       }
     }
     
-    // Enable graceful stop for both modes
-    const gracefulStop = (signal: string) => {
-      console.log(`🔄 Received ${signal}, shutting down gracefully...`);
-      bot.stop(signal);
-      process.exit(0);
-    };
-    
-    process.once('SIGINT', () => gracefulStop('SIGINT'));
-    process.once('SIGTERM', () => gracefulStop('SIGTERM'));
+    // Enable graceful stop
+    process.once('SIGINT', () => bot.stop('SIGINT'));
+    process.once('SIGTERM', () => bot.stop('SIGTERM'));
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Failed to start bot:', errorMessage);
@@ -1164,24 +1556,24 @@ bot.action(/buy_stars_(\d+)/, async (ctx) => {
   
   const starsAmount = parseInt(ctx.match[1]);
   
-  // Calculate Star price based on credit amount (with discounts)
-  let starPrice: number;
+  // Calculate price based on star amount
+  let price;
   switch(starsAmount) {
-    case 100: starPrice = 100; break;   // 100 Stars = 100 Credits
-    case 500: starPrice = 500; break;   // 500 Stars = 500 Credits  
-    case 1000: starPrice = 950; break;  // 950 Stars = 1000 Credits (5% discount)
-    case 2500: starPrice = 2250; break; // 2250 Stars = 2500 Credits (10% discount)
-    default: starPrice = 100;
+    case 100: price = 499; break;    // $4.99
+    case 500: price = 1999; break;   // $19.99
+    case 1000: price = 3499; break;  // $34.99
+    case 2500: price = 6999; break;  // $69.99
+    default: price = 499;
   }
   
-  // Create a Telegram Stars invoice
+  // Create an invoice with TON support
   const invoice = {
-    title: `${starsAmount} Logo Credits`,
-    description: `Purchase ${starsAmount} ⭐ credits for AI logo generation`,
+    title: `${starsAmount} Stars`,
+    description: `Purchase ${starsAmount} ⭐ stars for your Crypto AI Images`,
     payload: `stars_${starsAmount}_${ctx.from.id}_${Date.now()}`,
-    provider_token: '',              // Empty for Telegram Stars
-    currency: 'XTR',                 // Telegram Stars currency
-    prices: [{ label: `${starsAmount} Credits`, amount: starPrice }], // Direct Stars
+    provider_token: process.env.PROVIDER_TOKEN || '',
+    currency: 'USD',
+    prices: [{ label: `${starsAmount} Stars`, amount: price }],
     start_parameter: `buy_stars_${starsAmount}`,
   };
   
@@ -1278,7 +1670,17 @@ bot.action('finish_add_stickers', async (ctx) => {
     return;
   }
   // Create or add to the sticker pack
-  const packName = `starter_pack_${(ctx.from.username || ctx.from.id).toString().toLowerCase()}_by_logoaidbot`;
+  // Build a valid sticker set name per Telegram rules:
+  // - Only latin letters, digits, underscores
+  // - Total length <= 64
+  // - Must end with `_by_<bot_username>` where <bot_username> is EXACT
+  const userSlug = (ctx.from.username || ctx.from.id).toString().toLowerCase();
+  const baseRaw = `starter_pack_${userSlug}`;
+  const suffix = RESOLVED_BOT_USERNAME ? `_by_${RESOLVED_BOT_USERNAME}` : '';
+  const baseSanitized = baseRaw.replace(/[^a-zA-Z0-9_]/g, '_');
+  const maxBaseLen = Math.max(1, 64 - suffix.length);
+  const clippedBase = baseSanitized.slice(0, maxBaseLen);
+  const packName = `${clippedBase}${suffix}`;
   const packTitle = `Starter Pack by ${ctx.from.first_name || 'User'}`;
   const emojis = '😎';
   try {
@@ -1404,7 +1806,7 @@ bot.action('referral_menu', async (ctx) => {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.')}` }],
+              [{ text: '📤 Share Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.')}` }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
           }
@@ -1456,7 +1858,7 @@ bot.action(/feedback_(like|dislike)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           { text: action === 'dislike' ? '👎 Disliked!' : '👎 Dislike', callback_data: `feedback_dislike_${userId}_${timestamp}_${logoIndex}` }
         ],
         [
-          { text: '📥 Download HD', callback_data: `download_logo_${logoIndex}` },
+          { text: '✅ Select This Logo', callback_data: `select_logo_${userId}_${timestamp}_${logoIndex}` },
           { text: '🔄 Regenerate', callback_data: `regenerate_logo_${logoIndex}` }
         ]
       ]
@@ -1467,24 +1869,770 @@ bot.action(/feedback_(like|dislike)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   }
 });
 
-// Handle download feedback
-bot.action(/download_logo_(\d+)/, async (ctx) => {
-  await ctx.answerCbQuery('Preparing high-resolution download...');
+// Handle logo selection and generate complete professional package
+bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
   
-  const logoIndex = parseInt(ctx.match[1]);
-  const userId = ctx.from?.id;
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  const userIdNum = parseInt(userId);
+  const logoIndexNum = parseInt(logoIndex);
+  
+  console.log(`[LogoSelection] User ${userId} selected logo ${logoIndex}`);
   
   try {
-    // Log download feedback
-    console.log(`[Feedback] User ${userId} downloaded logo ${logoIndex}`);
+    // Find the generation data from session or database
+    const user = await User.findOne({ userId: userIdNum });
+    if (!user) {
+      await ctx.reply('❌ User not found. Please try generating logos again.');
+      return;
+    }
     
-    // Here you would implement the actual download logic
-    await ctx.reply('🎉 High-resolution download feature coming soon.');
+    // Get the generation record
+    const generationRecord = await ImageGeneration.findOne({
+      userId: userIdNum,
+      timestamp: new Date(parseInt(timestamp)),
+      type: 'logo'
+    });
+    
+    if (!generationRecord) {
+      await ctx.reply('❌ Generation not found. Please try generating logos again.');
+      return;
+    }
+    
+    // Show processing message
+    await ctx.editMessageReplyMarkup({
+      inline_keyboard: [
+        [
+          { text: '⏳ Generating Complete Package...', callback_data: 'processing' }
+        ]
+      ]
+    });
+    
+    await ctx.reply(
+      `🎉 *Logo Selected!*\n\n` +
+      `🎨 Generating your complete professional logo package...\n\n` +
+      `This includes:\n` +
+      `• Color variants (transparent, white, black)\n` +
+      `• Size variants (favicon to print)\n` +
+      `• Vector formats (SVG, PDF, EPS)\n` +
+      `• Social media assets\n\n` +
+      `⏳ Please wait while we create your professional package...`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    // Generate complete package with timeout and retry logic
+    try {
+      const timeoutMs = 120000; // 2 minutes timeout
+      const completePackage = await Promise.race([
+        completeAssetGenerationService.generateCompletePackage({
+          brandName: generationRecord.generationMetadata?.brandName || 'Your Brand',
+          originalImageUrl: generationRecord.imageUrl, // Use the original selected logo URL
+          userId: userIdNum.toString(),
+          sessionId: generationRecord.generationMetadata?.sessionId || `complete-${userIdNum}-${Date.now()}`
+        }),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Complete package generation timed out')), timeoutMs);
+        })
+      ]) as any;
+      
+      console.log(`[LogoSelection] Generated complete package for user ${userId}:`, {
+        colorVariants: ['transparent', 'white', 'black'],
+        sizes: Object.keys(completePackage.sizes),
+        vectorFormats: completePackage.svg ? ['svg', 'pdf', 'eps'] : [],
+        zipUrl: completePackage.zipUrl
+      });
+      
+      // Store complete package in session
+      if (!ctx.session) ctx.session = {} as any;
+      (ctx.session as any).selectedLogo = {
+        userId: userIdNum,
+        timestamp: parseInt(timestamp),
+        logoIndex: logoIndexNum,
+        completePackage
+      };
+      
+      // Show success message with download options
+      await ctx.reply(
+        `🎉 *Complete Professional Logo Package Ready!*\n\n` +
+        `Your logo package includes:\n\n` +
+        `📏 *Size Variants:*\n` +
+        `• Favicon: 16px, 32px, 48px, 64px\n` +
+        `• Web: 192px, 512px\n` +
+        `• Social: 400px, 800px, 1080px\n` +
+        `• Print: 1000px, 2000px, 3000px\n\n` +
+        `🎯 *Specialized Icons:*\n` +
+        `• AI-generated icon-only versions\n` +
+        `• Optimized for different platforms\n` +
+        `• Clean, text-free designs\n\n` +
+        `Choose your download option:`,
+        { 
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '📦 Download Complete Package (ZIP) - 50⭐', callback_data: `download_complete_package_${userId}_${timestamp}_${logoIndex}` }
+              ],
+              [
+                { text: '📏 Size Variants', callback_data: `download_sizes_${userId}_${timestamp}_${logoIndex}` },
+                { text: '🎯 Specialized Icons', callback_data: `download_icons_${userId}_${timestamp}_${logoIndex}` }
+              ],
+              [
+                { text: '🔄 Generate More Variants', callback_data: `back_to_variants_${userId}_${timestamp}_${logoIndex}` }
+              ],
+              [
+                { text: '🏠 Back to Menu', callback_data: 'back_to_menu' }
+              ]
+            ]
+          }
+        }
+      );
+      
+    } catch (packageError) {
+      console.error('[LogoSelection] Error generating complete package:', packageError);
+      
+      // Determine error type and provide appropriate message
+      let errorMessage = "❌ Error generating complete package. Falling back to basic variants...";
+      if (packageError instanceof Error) {
+        if (packageError.message.includes('timed out')) {
+          errorMessage = "⏰ Complete package generation timed out. This can happen with large images or slow networks.";
+        } else if (packageError.message.includes('fetch')) {
+          errorMessage = "🌐 Network error during package generation. Please try again.";
+        } else if (packageError.message.includes('ENOENT') || packageError.message.includes('file')) {
+          errorMessage = "📁 File access error. The logo may have been removed.";
+        }
+      }
+      
+      // Set up basic session data for downloads even when complete package fails
+      try {
+        if (!ctx.session) ctx.session = {} as any;
+        (ctx.session as any).selectedLogo = {
+          userId: userIdNum,
+          timestamp: parseInt(timestamp),
+          logoIndex: logoIndexNum,
+          completePackage: {
+            brandName: generationRecord.generationMetadata?.brandName || 'Your Brand',
+            // Set empty sizes and formats since complete package failed
+            sizes: {},
+            svg: null,
+            zipUrl: null,
+            error: packageError instanceof Error ? packageError.message : 'Unknown error'
+          }
+        };
+      } catch (sessionError) {
+        console.error('[LogoSelection] Error setting up session fallback:', sessionError);
+      }
+      
+      try {
+        await ctx.reply(
+          `${errorMessage}\n\n` +
+          `You can still create basic variants of your selected logo:`,
+          { 
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '🖼️ Standard', callback_data: `generate_variant_standard_${userId}_${timestamp}_${logoIndex}` },
+                  { text: '✨ Transparent', callback_data: `generate_variant_transparent_${userId}_${timestamp}_${logoIndex}` }
+                ],
+                [
+                  { text: '⬜ White Background', callback_data: `generate_variant_white_${userId}_${timestamp}_${logoIndex}` },
+                  { text: '🔠 Icon Only', callback_data: `generate_variant_icon_${userId}_${timestamp}_${logoIndex}` }
+                ],
+                [
+                  { text: '🔄 Try Complete Package Again', callback_data: `select_logo_${userId}_${timestamp}_${logoIndex}` }
+                ],
+                [
+                  { text: '🏠 Back to Menu', callback_data: 'back_to_menu' }
+                ]
+              ]
+            }
+          }
+        );
+      } catch (replyError) {
+        console.error('[LogoSelection] Error sending fallback message:', replyError);
+        
+        // Try a simple fallback message
+        try {
+          await ctx.reply('❌ Error occurred. Please use /menu to restart.');
+        } catch (finalError) {
+          console.error('[LogoSelection] Final fallback message failed:', finalError);
+        }
+      }
+    }
     
   } catch (error) {
-    console.error('[Feedback] Error processing download:', error);
-    await ctx.reply('❌ Error processing download. Please try again.');
+    console.error('[LogoSelection] Error handling logo selection:', error);
+    await ctx.reply('❌ Error processing your selection. Please try again.');
   }
+});
+
+// Handle variant generation
+bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const [, variantType, userId, timestamp, logoIndex] = ctx.match;
+  const userIdNum = parseInt(userId);
+  const logoIndexNum = parseInt(logoIndex);
+  
+  console.log(`[VariantGeneration] User ${userId} requesting ${variantType} variant for logo ${logoIndex}`);
+  
+  try {
+    // Get user from database
+    const user = await User.findOne({ userId: userIdNum });
+    if (!user) {
+      await ctx.reply('❌ User not found. Please try generating logos again.');
+      return;
+    }
+    
+    // For standard variant, just use the already generated logo
+    if (variantType === 'standard') {
+      // Get the stored generation data from database
+      const generationRecord = await ImageGeneration.findOne({ 
+        userId: userIdNum,
+        type: 'logo',
+        generationMetadata: { $exists: true }
+      }).sort({ timestamp: -1 }); // Get most recent generation
+      
+      if (!generationRecord || !generationRecord.imageUrls || !generationRecord.imageUrls[logoIndexNum]) {
+        await ctx.reply('❌ Logo not found. Please generate new logos first.');
+        return;
+      }
+      
+      // Use the already generated logo
+      const logoUrl = generationRecord.imageUrls[logoIndexNum];
+      
+      await ctx.replyWithPhoto(
+        logoUrl,
+        { 
+          caption: `🖼️ Standard Logo\n\nThis is your original generated logo - no additional processing needed!`,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '📥 Download Original', url: logoUrl }
+              ],
+              [
+                { text: '🔄 Back to Variants', callback_data: `back_to_variants_${userId}_${timestamp}_${logoIndex}` }
+              ]
+            ]
+          }
+        }
+      );
+      return;
+    }
+    
+    // For other variants, show processing message
+    await ctx.reply(`🎨 Generating ${variantType} variant... This may take a moment.`);
+    
+    // Get the stored generation data from database
+    const generationRecord = await ImageGeneration.findOne({ 
+      userId: userIdNum,
+      type: 'logo',
+      generationMetadata: { $exists: true }
+    }).sort({ timestamp: -1 }); // Get most recent generation
+    
+    if (!generationRecord || !generationRecord.generationMetadata?.allSeeds) {
+      await ctx.reply('❌ Generation data not found. Please generate new logos first.');
+      return;
+    }
+    
+    // Get the seed for the selected logo
+    const selectedSeed = generationRecord.generationMetadata.allSeeds[logoIndexNum] || 
+                        generationRecord.seed || 
+                        Math.floor(Math.random() * 1000000);
+    
+    console.log(`[VariantGeneration] Using seed ${selectedSeed} for logo ${logoIndexNum}`);
+    
+    // Generate the variant using LogoVariantService with the correct seed
+    const generationData = {
+      userId: userIdNum,
+      sessionId: generationRecord.generationMetadata.sessionId || `variant-${userIdNum}-${Date.now()}`,
+      originalPrompt: generationRecord.originalPrompt || `Professional logo design for brand`,
+      selectedImageIndex: logoIndexNum,
+      brandName: generationRecord.generationMetadata.brandName || 'Your Brand',
+      seed: selectedSeed // Use the stored seed
+    };
+    
+    const selectedVariants = [variantType as 'standard' | 'transparent' | 'white' | 'icon'];
+    const variants = await logoVariantService.generateVariants(generationData, selectedVariants);
+    const variantUrl = variants[variantType];
+    
+    if (variantUrl) {
+      // Fetch the variant image for sending
+      try {
+        const response = await fetch(variantUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const variantBuffer = Buffer.from(arrayBuffer);
+        
+        // Send preview as photo
+        await ctx.replyWithPhoto(
+          { source: variantBuffer },
+          { 
+            caption: `📸 Preview: ${variantType.charAt(0).toUpperCase() + variantType.slice(1)} variant generated!`,
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '🔄 Generate Another Variant', callback_data: `back_to_variants_${userId}_${timestamp}_${logoIndex}` },
+                  { text: '🏠 Back to Menu', callback_data: 'back_to_menu' }
+                ]
+              ]
+            }
+          }
+        );
+        
+        // Send original PNG as document for download
+        await ctx.replyWithDocument(
+          { 
+            source: variantBuffer, 
+            filename: `${generationData.brandName?.replace(/\s+/g, '-').toLowerCase() || 'logo'}-${variantType}.png` 
+          },
+          { 
+            caption: `📥 Download: ${variantType.charAt(0).toUpperCase() + variantType.slice(1)} Variant (PNG Format)\n\nHigh-quality PNG with ${variantType === 'transparent' ? 'transparent' : variantType === 'white' ? 'white' : 'transparent'} background - perfect for professional use!`,
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '🔄 Generate Another Variant', callback_data: `back_to_variants_${userId}_${timestamp}_${logoIndex}` },
+                  { text: '🏠 Back to Menu', callback_data: 'back_to_menu' }
+                ]
+              ]
+            }
+          }
+        );
+        
+      } catch (fetchError) {
+        console.error('[VariantGeneration] Error fetching variant image:', fetchError);
+        await ctx.reply('❌ Error processing variant image. Please try again.');
+      }
+    } else {
+      await ctx.reply('❌ Failed to generate variant. Please try again.');
+    }
+    
+  } catch (error) {
+    console.error('[VariantGeneration] Error generating variant:', error);
+    await ctx.reply('❌ Error generating variant. Please try again later.');
+  }
+});
+
+// Handle generate all variants
+bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  const userIdNum = parseInt(userId);
+  const logoIndexNum = parseInt(logoIndex);
+  
+  console.log(`[VariantGeneration] User ${userId} generating all variants for logo ${logoIndex}`);
+  
+  try {
+    // Get user from database
+    const user = await User.findOne({ userId: userIdNum });
+    if (!user) {
+      await ctx.reply('❌ User not found. Please try generating logos again.');
+      return;
+    }
+    
+    // Show processing message
+    await ctx.reply(`🎨 Generating all variants... This may take a few moments.`);
+    
+    const variants = ['standard', 'transparent', 'white', 'icon'];
+    const results = [];
+    
+    for (const variantType of variants) {
+      try {
+        const generationData = {
+          userId: userIdNum,
+          sessionId: `variant-${userIdNum}-${Date.now()}`,
+          originalPrompt: `Professional logo design for brand`,
+          selectedImageIndex: logoIndexNum,
+          brandName: 'Your Brand'
+        };
+        
+        const selectedVariants = [variantType as 'standard' | 'transparent' | 'white' | 'icon'];
+        const variants = await logoVariantService.generateVariants(generationData, selectedVariants);
+        const variantUrl = variants[variantType];
+        
+        if (variantUrl) {
+          results.push({ type: variantType, url: variantUrl });
+        }
+      } catch (error) {
+        console.error(`[VariantGeneration] Error generating ${variantType}:`, error);
+      }
+    }
+    
+    if (results.length > 0) {
+      let message = `🎉 Generated ${results.length} variants:\n\n`;
+      for (const result of results) {
+        message += `• ${result.type.charAt(0).toUpperCase() + result.type.slice(1)}: ✅\n`;
+      }
+      
+      await ctx.reply(message, {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🔄 Generate More Variants', callback_data: `back_to_variants_${userId}_${timestamp}_${logoIndex}` },
+              { text: '🏠 Back to Menu', callback_data: 'back_to_menu' }
+            ]
+          ]
+        }
+      });
+      
+      // Send each variant as both photo preview and document download
+      for (const result of results) {
+        try {
+          const response = await fetch(result.url);
+          const arrayBuffer = await response.arrayBuffer();
+          const variantBuffer = Buffer.from(arrayBuffer);
+          
+          // Send preview as photo
+          await ctx.replyWithPhoto(
+            { source: variantBuffer },
+            { 
+              caption: `📸 Preview: ${result.type.charAt(0).toUpperCase() + result.type.slice(1)} Variant`
+            }
+          );
+          
+          // Send original PNG as document for download
+          await ctx.replyWithDocument(
+            { 
+              source: variantBuffer, 
+              filename: `logo-${result.type}.png` 
+            },
+            { 
+              caption: `📥 Download: ${result.type.charAt(0).toUpperCase() + result.type.slice(1)} Variant (PNG Format)\n\nHigh-quality PNG - perfect for professional use!`
+            }
+          );
+          
+        } catch (fetchError) {
+          console.error(`[VariantGeneration] Error fetching ${result.type} variant:`, fetchError);
+        }
+      }
+    } else {
+      await ctx.reply('❌ Failed to generate any variants. Please try again.');
+    }
+    
+  } catch (error) {
+    console.error('[VariantGeneration] Error generating all variants:', error);
+    await ctx.reply('❌ Error generating variants. Please try again later.');
+  }
+});
+
+// Handle back to variants menu
+bot.action(/back_to_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  
+  await ctx.reply(
+    `Choose which variants to generate:`,
+    { 
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🖼️ Standard', callback_data: `generate_variant_standard_${userId}_${timestamp}_${logoIndex}` },
+            { text: '✨ Transparent', callback_data: `generate_variant_transparent_${userId}_${timestamp}_${logoIndex}` }
+          ],
+          [
+            { text: '⬜ White Background', callback_data: `generate_variant_white_${userId}_${timestamp}_${logoIndex}` },
+            { text: '🔠 Icon Only', callback_data: `generate_variant_icon_${userId}_${timestamp}_${logoIndex}` }
+          ],
+          [
+            { text: '🎨 Generate All Variants', callback_data: `generate_all_variants_${userId}_${timestamp}_${logoIndex}` }
+          ]
+        ]
+      }
+    }
+  );
+});
+
+// Handle complete package download
+bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  try {
+    await ctx.answerCbQuery('Preparing download...');
+  } catch (err) {
+    console.error('[Download] Error answering callback query:', err);
+  }
+  
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  const userIdNum = parseInt(userId);
+  
+  console.log(`[Download] Complete package download requested: userId=${userId}, timestamp=${timestamp}, logoIndex=${logoIndex}`);
+  
+  try {
+    // Check if we're in testing mode
+    const isTestingMode = process.env.NODE_ENV !== 'production' || process.env.BETA_TESTING === 'true';
+    
+    if (!isTestingMode) {
+      // Production mode - check user balance for 50 credits
+      const user = await User.findOne({ userId: userIdNum });
+      if (!user) {
+        await ctx.reply('❌ User not found. Please try again.');
+        return;
+      }
+      
+      const requiredCredits = 50;
+      if (user.starBalance < requiredCredits) {
+        await ctx.reply(
+          `❌ Insufficient balance!\n\n` +
+          `Complete package costs: ${requiredCredits} ⭐\n` +
+          `Your balance: ${user.starBalance} ⭐\n\n` +
+          `Please top up your balance to download the complete package.`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+      
+      // Deduct credits
+      user.starBalance -= requiredCredits;
+      await user.save();
+      
+      console.log(`[Download] Deducted ${requiredCredits} credits from user ${userIdNum}. New balance: ${user.starBalance}`);
+    } else {
+      console.log(`[Download] Testing mode - skipping payment for user ${userIdNum}`);
+    }
+    
+    const selectedLogo = (ctx.session as any)?.selectedLogo;
+    
+    console.log(`[Download] Session check: selectedLogo exists=${!!selectedLogo}, completePackage exists=${!!selectedLogo?.completePackage}`);
+    
+    if (!selectedLogo || !selectedLogo.completePackage) {
+      console.error('[Download] No selectedLogo or completePackage in session');
+      await ctx.reply('❌ Complete package not found. Please select a logo again.');
+      return;
+    }
+    
+    const zipUrl = selectedLogo.completePackage.zipUrl;
+    console.log(`[Download] ZIP URL: ${zipUrl}`);
+    
+    if (!zipUrl) {
+      console.error('[Download] ZIP URL is null or undefined');
+      await ctx.reply('❌ ZIP package not available. Please try again.');
+      return;
+    }
+    
+    // Handle file:// URLs by reading directly from filesystem
+    let zipBuffer: Buffer;
+    if (zipUrl.startsWith('file://')) {
+      const filePath = zipUrl.replace('file://', '');
+      console.log(`[Download] Reading ZIP from file system: ${filePath}`);
+      
+      if (!await fs.promises.access(filePath).then(() => true).catch(() => false)) {
+        console.error(`[Download] File not found: ${filePath}`);
+        await ctx.reply('❌ ZIP file not found. It may have been deleted. Please generate a new logo.');
+        return;
+      }
+      
+      zipBuffer = await fs.promises.readFile(filePath);
+      console.log(`[Download] Read ${zipBuffer.length} bytes from file system`);
+    } else {
+      // Handle HTTP URLs with fetch
+      console.log(`[Download] Fetching ZIP from URL: ${zipUrl}`);
+      const response = await fetch(zipUrl);
+      
+      if (!response.ok) {
+        console.error(`[Download] Fetch failed: ${response.status} ${response.statusText}`);
+        await ctx.reply(`❌ Failed to download package: ${response.statusText}`);
+        return;
+      }
+      
+      zipBuffer = Buffer.from(await response.arrayBuffer());
+      console.log(`[Download] Downloaded ${zipBuffer.length} bytes from URL`);
+    }
+    
+    console.log(`[Download] Sending ZIP document to user...`);
+    
+    // Check testing mode for display
+    const isTestingModeDisplay = process.env.NODE_ENV !== 'production' || process.env.BETA_TESTING === 'true';
+    
+    await ctx.replyWithDocument(
+      { 
+        source: zipBuffer, 
+        filename: `Complete_Logo_Package_${selectedLogo.completePackage.brandName || 'logo'}.zip` 
+      },
+      { 
+        caption: `📦 *Complete Professional Logo Package*\n\n` +
+        `Your complete logo package includes:\n` +
+        `• Color variants (transparent, white, black)\n` +
+        `• Size variants (favicon to print)\n` +
+        `• Vector formats (SVG, PDF, EPS)\n` +
+        `• Social media assets\n\n` +
+        `${isTestingModeDisplay ? '🧪 Testing Mode - FREE!' : '💰 Cost: 50⭐'}\n` +
+        `Perfect for professional use! 🚀`,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🏠 Back to Menu', callback_data: 'back_to_menu' }
+            ]
+          ]
+        }
+      }
+    );
+    
+    console.log(`[Download] ZIP document sent successfully`);
+    
+  } catch (error) {
+    console.error('[Download] Error downloading complete package:', error);
+    await ctx.reply(`❌ Error downloading complete package: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`);
+  }
+});
+
+// Handle specialized icons download
+bot.action(/download_icons_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  
+  try {
+    const selectedLogo = (ctx.session as any)?.selectedLogo;
+    if (!selectedLogo || !selectedLogo.completePackage) {
+      await ctx.reply('❌ Specialized icons not found. Please select a logo again.');
+      return;
+    }
+    
+    // Get the complete package ZIP URL and download it
+    const logoPackage = selectedLogo.completePackage;
+    if (logoPackage.zipUrl) {
+      const response = await fetch(logoPackage.zipUrl);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      
+      await ctx.replyWithDocument(
+        { 
+          source: buffer, 
+          filename: `specialized_icons_${logoPackage.brandName || 'logo'}.zip` 
+        },
+        { 
+          caption: `🎯 Specialized Icons Package\n\nAI-generated icon-only versions optimized for different platforms:\n• Favicon (64x64)\n• App Icon (512x512)\n• Social Media (400x400)\n• Print (1000x1000)`
+        }
+      );
+    } else {
+      await ctx.reply('❌ Specialized icons package not available. Please try again.');
+    }
+    
+  } catch (error) {
+    console.error('[Download] Error downloading specialized icons:', error);
+    await ctx.reply('❌ Error downloading specialized icons. Please try again.');
+  }
+});
+
+// Handle size variants download
+bot.action(/download_sizes_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  
+  try {
+    const selectedLogo = (ctx.session as any)?.selectedLogo;
+    if (!selectedLogo || !selectedLogo.completePackage) {
+      await ctx.reply('❌ Size variants not found. Please select a logo again.');
+      return;
+    }
+    
+    const logoPackage = selectedLogo.completePackage;
+    const sizeCategories = Object.entries(logoPackage.sizes);
+    
+    for (const [category, urls] of sizeCategories) {
+      if (Array.isArray(urls) && urls.length > 0) {
+        await ctx.reply(`📏 *${category.charAt(0).toUpperCase() + category.slice(1)} Sizes:*`);
+        
+        for (let i = 0; i < urls.length; i++) {
+          try {
+            const response = await fetch(urls[i]);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            
+            // Extract size from filename or use category info
+            const size = category === 'favicon' ? [16, 32, 48, 64][i] :
+                        category === 'web' ? [192, 512][i] :
+                        category === 'social' ? [400, 800, 1080][i] :
+                        category === 'print' ? [1000, 2000, 3000][i] : 'unknown';
+            
+            await ctx.replyWithDocument(
+              { 
+                source: buffer, 
+                filename: `logo_${size}x${size}.png` 
+              },
+              { 
+                caption: `📏 ${size}x${size}px - ${category.charAt(0).toUpperCase() + category.slice(1)} Size`
+              }
+            );
+          } catch (fetchError) {
+            console.error(`[Download] Error fetching size variant:`, fetchError);
+          }
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error('[Download] Error downloading size variants:', error);
+    await ctx.reply('❌ Error downloading size variants. Please try again.');
+  }
+});
+
+// Handle vector formats download
+bot.action(/download_vectors_(\d+)_(\d+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const [, userId, timestamp, logoIndex] = ctx.match;
+  
+  try {
+    const selectedLogo = (ctx.session as any)?.selectedLogo;
+    if (!selectedLogo || !selectedLogo.completePackage) {
+      await ctx.reply('❌ Vector formats not found. Please select a logo again.');
+      return;
+    }
+    
+    const logoPackage = selectedLogo.completePackage;
+    const vectorFormats = [
+      { name: 'SVG', url: logoPackage.svg, filename: 'logo.svg' },
+      { name: 'PDF', url: logoPackage.pdf, filename: 'logo.pdf' },
+      { name: 'EPS', url: logoPackage.eps, filename: 'logo.eps' }
+    ];
+    
+    let hasAnyFormat = false;
+    
+    for (const format of vectorFormats) {
+      if (format.url) {
+        hasAnyFormat = true;
+        try {
+          const response = await fetch(format.url);
+          const buffer = Buffer.from(await response.arrayBuffer());
+          
+          await ctx.replyWithDocument(
+            { 
+              source: buffer, 
+              filename: format.filename 
+            },
+            { 
+              caption: `📐 ${format.name} Vector Format\n\n` +
+              `Perfect for ${format.name === 'SVG' ? 'web and scalable graphics' : 
+                          format.name === 'PDF' ? 'print and documents' : 
+                          'professional printing and design'}!`
+            }
+          );
+        } catch (fetchError) {
+          console.error(`[Download] Error fetching ${format.name}:`, fetchError);
+        }
+      }
+    }
+    
+    if (!hasAnyFormat) {
+      await ctx.reply('❌ Vector formats not available. Using high-quality PNGs instead.');
+    }
+    
+  } catch (error) {
+    console.error('[Download] Error downloading vector formats:', error);
+    await ctx.reply('❌ Error downloading vector formats. Please try again.');
+  }
+});
+
+// Handle back to menu
+bot.action('back_to_menu', async (ctx) => {
+  await ctx.answerCbQuery();
+  await sendMainMenu(ctx);
 });
 
 // Handle regenerate feedback
@@ -1626,7 +2774,7 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
     
     if (stats.referralCode) {
       const referralLink = `https://t.me/${ctx.botInfo.username}?start=${stats.referralCode}`;
-      const shareText = `🎨 Check out this amazing meme I created with Instalogo Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
+      const shareText = `🎨 Check out this amazing meme I created with BrandForge Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
       
       await ctx.reply(
         `📤 *Share Your Meme & Earn Stars!*\n\n` +
@@ -1657,19 +2805,35 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
   }
 });
 
-// Connect to MongoDB first, then start the bot
-const initializeApp = async () => {
-  try {
-    console.log('🔄 Connecting to MongoDB Atlas...');
-    await connectDB();
-    console.log('✅ Database connection successful! Connected to instalogo database');
-    console.log('🚀 Starting Telegram bot...');
-    await startBot();
-  } catch (error) {
-    console.error('❌ Failed to initialize application:', error);
-    console.error('💡 Check your MONGODB_URI in .env file');
-    process.exit(1);
-  }
-};
+// 🧪 Testing mode admin commands
+bot.command('testingstatus', async (ctx) => {
+  const isTestMode = process.env.TESTING === 'true';
+  const statusEmoji = isTestMode ? '✅' : '❌';
+  const statusText = isTestMode ? 'ENABLED' : 'DISABLED';
+  
+  const message = `🧪 **Testing Mode Status**\n\n` +
+    `${statusEmoji} Testing Mode: **${statusText}**\n\n` +
+    `📝 **What this means:**\n` +
+    `• Credit checks: ${isTestMode ? 'SKIPPED' : 'ACTIVE'}\n` +
+    `• Balance deduction: ${isTestMode ? 'SKIPPED' : 'ACTIVE'}\n` +
+    `• Free generations: ${isTestMode ? 'UNLIMITED' : 'LIMITED'}\n\n` +
+    `${isTestMode ? '🎉 Perfect for beta testing!' : '💰 Production mode active'}`;
+  
+  await ctx.reply(message, { parse_mode: 'Markdown' });
+});
 
-initializeApp(); 
+bot.command('toggletesting', async (ctx) => {
+  // This is just informational - actual toggle requires environment variable change
+  await ctx.reply(
+    '🔧 **How to Toggle Testing Mode:**\n\n' +
+    '1. Update `.env` file:\n' +
+    '   • `TESTING=true` for testing mode\n' +
+    '   • `TESTING=false` for production mode\n\n' +
+    '2. Restart the bot service\n\n' +
+    'Use `/testingstatus` to check current status.',
+    { parse_mode: 'Markdown' }
+  );
+});
+
+connectDB();
+startBot(); 

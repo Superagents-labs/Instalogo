@@ -73,14 +73,7 @@ export function startImageWorker(processImageJob: JobProcessor) {
     });
   });
   
-  agenda.define('edit-sticker', async (job: AgendaJob) => {
-    if (!imageJobProcessor) throw new Error('Image job processor not defined');
-    return await imageJobProcessor({
-      id: job.attrs._id.toString(),
-      name: 'edit-sticker',
-      data: job.attrs.data
-    });
-  });
+
 
   // Start agenda
   (async function() {

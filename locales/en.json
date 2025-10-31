@@ -1,8 +1,8 @@
 {
   "welcome": {
-    "title": "BrandForge Bot 🤖",
+    "title": "Instalogo Bot 🤖",
     "what_to_do": "What would you like to do?",
-    "star_balance": "Your Credits",
+    "star_balance": "Your Star Balance",
     "built_by": "Built by SuperAgent Labs"
   },
   "menu": {
@@ -18,8 +18,7 @@
   "general": {
     "photo_received": "Photo received! (debug)",
     "please_upload": "Please upload a PNG image (512x512, <512KB) to use as your starter sticker!",
-    "please_describe": "Please provide a description of how you want to modify the image:",
-    "starter_pack_created": "Your starter sticker pack is created! [View it here](https://t.me/addstickers/{{packName}})",
+    "starter_pack_created": "Your starter sticker pack is created! [View it here]()",
     "processing_image": "Processing your image for sticker creation...",
     "image_queued": "Your image has been queued for editing! I will notify you when it's ready.",
     "image_error": "Sorry, there was an error processing your image. Please try again later.",
@@ -84,6 +83,8 @@
     "generate_meme": "Generate Meme 😂",
     "generating": "Generating your meme now...",
     "request_queued": "Your meme generation request is queued and will begin processing shortly. The average wait time is 1-2 minutes. {{costMessage}}",
+    "free_generation": "Your free generation will be used.",
+    "stars_deducted": "{{totalCost}} stars will be deducted from your balance.",
     "style_select": "Choose a meme style:",
     "custom_style_prompt": "Please describe your custom meme style:"
   },
@@ -112,7 +113,7 @@
     "vibe": "Describe your brand personality & values",
     "audience": "Who is your target audience?",
     "style_preferences": "Which styles suit your brand?",
-    "color_preferences": "Preferred colors?",
+    "color_preferences": "Preferred text/font colors?",
     "typography": "Select font style(s) for your logo",
     "icon_idea": "Select icon(s) or symbols for your logo",
     "inspiration": "Any logos you love or hate? Describe or share links, or type 'skip'.",
@@ -123,6 +124,8 @@
     "generating": "Great! Generating your logo concepts now...",
     "generating_based_on": "Generating your distinctive logo concepts based on your answers...",
     "request_queued": "Your logo generation request is queued. {{costMessage}} You will be notified when it starts processing.",
+    "free_generation": "Your free generation will be used.",
+    "stars_deducted": "{{totalCost}} stars will be deducted from your balance.",
     "please_answer_text": "Please answer using text.",
     "first_tell_name": "Please first tell me your business name.",
     "whats_business_name": "🎨 Great! What's your business name?",
@@ -157,17 +160,16 @@
     "back_to_history": "Back to History"
   },
   "stars": {
-    "choose_amount": "Choose how many logo credits you would like to purchase:",
-    "stars_100": "100 Credits - 100 ⭐",
-    "stars_500": "500 Credits - 500 ⭐",
-    "stars_1000": "1000 Credits - 950 ⭐ (5% off)",
-    "stars_2500": "2500 Credits - 2250 ⭐ (10% off)",
-    "how_to_buy": "💡 Don't have Stars? Just tap Pay and Telegram will let you buy Stars instantly!",
+    "choose_amount": "Choose how many stars you would like to purchase:",
+    "stars_100": "100 Stars - $4.99",
+    "stars_500": "500 Stars - $19.99",
+    "stars_1000": "1000 Stars - $34.99",
+    "stars_2500": "2500 Stars - $69.99",
     "payment_unavailable": "Sorry, payment system is temporarily unavailable. Please try again later.",
-    "payment_successful": "✅ Payment successful! {{amount}} logo credits added. Balance: {{balance}} credits.",
+    "payment_successful": "✅ Payment successful! {{amount}} ⭐ stars have been added to your balance. Your new balance is {{balance}} ⭐ stars.",
     "user_not_found": "User not found. Please contact support.",
     "error_updating": "Payment received but there was an error updating your balance. Please contact support.",
-    "stars_deducted": "{{totalCost}} credits will be used for this generation."
+    "stars_deducted": "{{totalCost}} stars will be deducted from your balance."
   },
   "referral": {
     "welcome_bonus": "🎉 Welcome! You've joined via a referral link. Start using the bot to unlock rewards for your referrer!",
@@ -182,7 +184,7 @@
     "they_get": "• They get: No bonus (fair pricing for all)",
     "share_message": "Share your link and earn stars! 🚀",
     "share_link": "📤 Share Link",
-    "share_text": "🎨 Join me on BrandForge Bot! Create amazing logos, memes, and stickers with AI.",
+    "share_text": "🎨 Join me on Instalogo Bot! Create amazing logos, memes, and stickers with AI.",
     "error_generating": "❌ Error generating referral code. Please try again later.",
     "error_accessing": "❌ Error accessing referral system. Please try again later.",
     "conversion_reward": "🎉 Great news! Someone you referred just used the bot and you've earned {{reward}} ⭐ stars!"
