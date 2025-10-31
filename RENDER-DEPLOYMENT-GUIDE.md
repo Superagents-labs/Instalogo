@@ -1,166 +1,203 @@
-# 🚀 Render Deployment Guide - Webhook Mode
+# 🚀 Render Deployment Guide for Instalogo Bot
 
-## ✅ Implementation Complete
+## 📋 Environment Variables Required
 
-Your bot now supports **both webhook (production) and polling (development)** modes with automatic switching based on environment variables.
+Copy and paste these environment variables in Render Dashboard:
 
-## 📊 What Was Added
-
-### 1. **Webhook Server** (`src/webhook.ts`)
-- ✅ Express.js server with security headers
-- ✅ Health check endpoints (`/` and `/health`)
-- ✅ Telegram webhook endpoint with token validation
-- ✅ Graceful shutdown handling
-- ✅ Error handling and fallbacks
-
-### 2. **Environment Switching** (`src/index.ts`)
-- ✅ Automatic mode detection (production = webhook, dev = polling)
-- ✅ Fallback to polling if webhook setup fails
-- ✅ Maintained all existing bot functionality
-- ✅ Enhanced error handling and logging
-
-### 3. **Configuration Files**
-- ✅ `render.yaml` - Render platform configuration
-- ✅ Updated `env.example` with webhook settings
-- ✅ Express.js dependencies added
-
-## 🚀 Deploy to Render (5 Minutes)
-
-### Step 1: Create Render Service
-1. Go to [render.com](https://render.com) and connect your GitHub
-2. Click **"New Web Service"**
-3. Select your `instalogo` repository
-4. Choose `clean-main` branch
-
-### Step 2: Configure Service
-```yaml
-Name: instalogo-bot
-Environment: Node
-Build Command: npm install && npm run build
-Start Command: npm start
+### 🔑 **Bot Configuration**
 ```
-
-### Step 3: Set Environment Variables
-```bash
+BOT_TOKEN=your_telegram_bot_token_here
 NODE_ENV=production
-WEBHOOK_URL=https://instalogo-bot.onrender.com/webhook/YOUR_BOT_TOKEN
 PORT=3000
-BOT_TOKEN=your_actual_bot_token
-MONGODB_URI=your_mongodb_atlas_connection_string
-CLOUDINARY_CLOUD_NAME=your_cloudinary_name
-CLOUDINARY_API_KEY=your_cloudinary_key
-CLOUDINARY_API_SECRET=your_cloudinary_secret
-REPLICATE_API_TOKEN=your_replicate_token
+WEBHOOK_URL=https://instalogo-bot.onrender.com/webhook/YOUR_BOT_TOKEN_HERE
 ```
 
-### Step 4: Deploy
-- Click **"Create Web Service"**
-- Render will automatically build and deploy
-- Check logs for successful webhook setup
-
-## 📱 Testing Your Deployment
-
-### 1. Health Check
-Visit: `https://your-app.onrender.com/health`
-Should return:
-```json
-{
-  "status": "healthy",
-  "bot": {
-    "username": "your_bot_username",
-    "id": 123456789
-  }
-}
+### 🗄️ **Database Configuration**
+```
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/instalogo?retryWrites=true&w=majority
 ```
 
-### 2. Bot Functionality
-- Send `/start` to your bot
-- Try generating a logo
-- Check payment system with Telegram Stars
-
-## 🔧 Local Development (Unchanged)
-
-For local development, your bot still works exactly the same:
-
-```bash
-# Uses polling mode automatically (NODE_ENV != production)
-npm run dev
+### ☁️ **Cloudinary Configuration**
+```
+CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 ```
 
-## 📊 Performance Comparison
-
-| Mode | Response Time | Monthly Cost | Scalability |
-|------|--------------|--------------|-------------|
-| **Webhook (Production)** | 50-200ms | $7-15 | Excellent |
-| **Polling (Development)** | 1-3 seconds | $20-25 | Limited |
-
-## 🛠️ Advanced Configuration
-
-### Custom Domain (Optional)
-1. Add custom domain in Render dashboard
-2. Update `WEBHOOK_URL` to use your domain
-3. Redeploy to update webhook with Telegram
-
-### Auto-Scaling (Optional)
-```yaml
-# In render.yaml
-scaling:
-  minInstances: 1
-  maxInstances: 3
-  targetCPU: 70
+### 🤖 **AI Services Configuration**
+```
+OPENAI_API_KEY=your_openai_api_key
+REPLICATE_API_TOKEN=your_replicate_api_token
 ```
 
-### Monitoring (Built-in)
-- **Health endpoint**: `/health`
-- **Bot info endpoint**: `/`
-- **Render metrics**: CPU, memory, response times
-- **Logs**: Real-time in Render dashboard
-
-## 🚨 Troubleshooting
-
-### Issue: Webhook Not Set
-**Solution**: Check `WEBHOOK_URL` format and bot token
-
-### Issue: 500 Errors
-**Solution**: Check MongoDB connection and environment variables
-
-### Issue: Slow Responses
-**Solution**: Upgrade to Standard plan ($15/month)
-
-### Issue: Bot Not Responding
-**Solution**: Check webhook endpoint URL and SSL certificate
-
-## 🔄 Rollback Plan
-
-If webhook deployment has issues, you can quickly revert:
-
-1. **Set environment**: `NODE_ENV=development`
-2. **Remove webhook URL**: Delete `WEBHOOK_URL` variable  
-3. **Redeploy**: Bot will automatically use polling mode
-
-## ✅ Production Checklist
-
-- [ ] Environment variables set correctly
-- [ ] Webhook URL matches deployed URL
-- [ ] Health check returns "healthy"
-- [ ] Bot responds to `/start` command
-- [ ] Logo generation works
-- [ ] Payment system functional
-- [ ] MongoDB connected
-- [ ] Cloudinary configured
-
-## 💰 Expected Monthly Costs
-
-**Render (Webhook)**:
-- Starter: $7/month (sufficient for most usage)
-- Standard: $15/month (recommended for business)
-
-**Database & Services**:
-- MongoDB Atlas: $9/month (M2 cluster)
-- Cloudinary: Free tier (up to 25GB)
-
-**Total**: $16-24/month (much cheaper than polling at $30-35/month)
+### 📊 **Optional Services**
+```
+REDIS_URL=redis://localhost:6379
+FAL_KEY=your_fal_ai_key (if using FAL AI)
+```
 
 ---
 
-Your bot is now **production-ready** with webhook support! 🎉
+## 🔧 Step-by-Step Render Setup
+
+### **Step 1: Create New Web Service**
+1. Go to [Render Dashboard](https://dashboard.render.com)
+2. Click **"New +"** → **"Web Service"**
+3. Connect your GitHub account if not already connected
+
+### **Step 2: Repository Configuration**
+- **Repository**: `Superagents-labs/Instalogo`
+- **Branch**: `render-deploy` ⚠️ **IMPORTANT: Use this branch!**
+- **Root Directory**: Leave empty (uses root)
+
+### **Step 3: Basic Settings**
+- **Name**: `instalogo-bot`
+- **Runtime**: `Node`
+- **Region**: `Oregon` (or `Singapore` for global users)
+- **Branch**: `render-deploy`
+
+### **Step 4: Build & Deploy Settings**
+- **Build Command**: `npm ci && npm run build`
+- **Start Command**: `npm start`
+- **Node Version**: `18.19.0` (auto-detected from .nvmrc)
+
+### **Step 5: Advanced Settings**
+- **Health Check Path**: `/health`
+- **Auto-Deploy**: ✅ Enabled
+- **Plan**: `Starter` (can upgrade to `Standard` for production)
+
+### **Step 6: Environment Variables**
+Click **"Advanced"** → **"Environment Variables"** and add all variables from the list above.
+
+⚠️ **CRITICAL**: Replace `YOUR_BOT_TOKEN_HERE` in `WEBHOOK_URL` with your actual bot token!
+
+---
+
+## 🔍 Environment Variables Explained
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `BOT_TOKEN` | Telegram Bot API token from @BotFather | `1234567890:ABCDEFghijklmnopqrstuvwxyz` |
+| `NODE_ENV` | Enables production mode (webhook) | `production` |
+| `PORT` | Server port (Render provides this) | `3000` |
+| `WEBHOOK_URL` | Telegram webhook endpoint | `https://your-app.onrender.com/webhook/BOT_TOKEN` |
+| `MONGODB_URI` | MongoDB Atlas connection string | `mongodb+srv://user:pass@cluster.net/db` |
+| `CLOUDINARY_*` | Image storage credentials | From Cloudinary dashboard |
+| `OPENAI_API_KEY` | OpenAI API access | From OpenAI platform |
+| `REPLICATE_API_TOKEN` | Flux AI model access | From Replicate platform |
+
+---
+
+## ✅ Deployment Checklist
+
+### **Before Deployment:**
+- [ ] All environment variables added to Render
+- [ ] `WEBHOOK_URL` contains your actual bot token
+- [ ] MongoDB Atlas allows connections from anywhere (0.0.0.0/0)
+- [ ] Cloudinary account is active
+- [ ] OpenAI account has credits
+- [ ] Replicate account has credits
+
+### **After Deployment:**
+- [ ] Service builds successfully
+- [ ] Health check at `/health` returns `200 OK`
+- [ ] Bot responds to `/start` in Telegram
+- [ ] Logo generation works
+- [ ] Payment system works
+- [ ] No error logs in Render dashboard
+
+---
+
+## 🔧 How to Get Environment Variables
+
+### **1. Telegram Bot Token**
+1. Message [@BotFather](https://t.me/botfather) on Telegram
+2. Send `/newbot` or use existing bot with `/token`
+3. Copy the token (format: `1234567890:ABC...`)
+
+### **2. MongoDB URI**
+1. Go to [MongoDB Atlas](https://cloud.mongodb.com/)
+2. Navigate to **Database** → **Connect** → **Connect your application**
+3. Copy the connection string
+4. Replace `<password>` with your actual password
+5. Replace `<database>` with `instalogo`
+
+### **3. Cloudinary Credentials**
+1. Go to [Cloudinary Console](https://console.cloudinary.com/)
+2. Find **Account Details** section
+3. Copy **Cloud Name**, **API Key**, and **API Secret**
+
+### **4. OpenAI API Key**
+1. Go to [OpenAI Platform](https://platform.openai.com/api-keys)
+2. Click **"Create new secret key"**
+3. Copy the key (starts with `sk-`)
+
+### **5. Replicate API Token**
+1. Go to [Replicate Account](https://replicate.com/account/api-tokens)
+2. Copy your default token or create a new one
+
+---
+
+## 🚨 Common Issues & Solutions
+
+### **Issue: Build Fails**
+- **Solution**: Check that `render-deploy` branch is selected
+- **Solution**: Verify Node.js version is 18.19.0
+
+### **Issue: Health Check Fails**
+- **Solution**: Ensure `NODE_ENV=production` is set
+- **Solution**: Check that `WEBHOOK_URL` is correct
+
+### **Issue: Bot Doesn't Respond**
+- **Solution**: Verify `BOT_TOKEN` is correct
+- **Solution**: Check webhook URL format: `https://your-app.onrender.com/webhook/BOT_TOKEN`
+
+### **Issue: Database Connection Error**
+- **Solution**: Check `MONGODB_URI` format and credentials
+- **Solution**: Whitelist `0.0.0.0/0` in MongoDB Atlas Network Access
+
+### **Issue: Image Generation Fails**
+- **Solution**: Verify Cloudinary credentials
+- **Solution**: Check OpenAI/Replicate API credits
+
+---
+
+## 📊 Monitoring & Maintenance
+
+### **Health Monitoring**
+- Health endpoint: `https://your-app.onrender.com/health`
+- Should return JSON with bot info and status
+
+### **Log Monitoring**
+- Check Render logs for errors
+- Monitor MongoDB Atlas for connection issues
+- Watch Cloudinary usage limits
+
+### **Cost Optimization**
+- **Starter Plan**: $7/month - Good for testing
+- **Standard Plan**: $25/month - Recommended for production
+- **Auto-scaling**: Enabled to handle traffic spikes
+
+---
+
+## 🎯 Success Verification
+
+After deployment, test these features:
+
+1. **Bot Start**: Send `/start` to your bot
+2. **Logo Generation**: Generate a test logo
+3. **Payment**: Try buying stars (test with small amount)
+4. **Health Check**: Visit `https://your-app.onrender.com/health`
+
+---
+
+## 🔄 Updating the Bot
+
+1. Push changes to `render-deploy` branch
+2. Render auto-deploys (if enabled)
+3. Monitor deployment in Render dashboard
+4. Test functionality after deployment
+
+---
+
+**🎉 You're ready to deploy! The bot will automatically switch to webhook mode in production and handle all Telegram updates efficiently.**

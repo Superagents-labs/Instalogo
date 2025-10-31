@@ -6,28 +6,29 @@ import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
 import { MongoDBService } from '../services/mongodb.service';
+import { addUserInterval } from '../utils/intervalManager';
 
 // Removed hardcoded questions - we'll use i18n translation keys instead
 export function createMemeWizardScene(openaiService: OpenAIService, mongodbService: MongoDBService): Scenes.WizardScene<BotContext> {
   const scene = new Scenes.WizardScene<BotContext>(
     'memeWizard',
-    // Step 1: Show upload message and wait for image or skip
+    // Step 1: Image upload or skip
     async (ctx) => {
-      // Don't process if we're in a recursive middleware call
-      if (ctx.__processingFlag) return;
-      
-      // Check if this is the initial entry (not from a user input)
       if (!ctx.message) {
-        await ctx.reply(ctx.i18n.t('memes.upload_image'));
-        return; // Don't advance automatically, wait for user input
+        await ctx.reply('🖼️ Upload an image for your meme (or type "skip"):', {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '⏭️ Skip Image', callback_data: 'meme_skip_image' }]
+            ]
+          }
+        });
+        return;
       }
       
-      // Handle user input in step 1
       if (ctx.message && 'photo' in ctx.message) {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         (ctx.session as any).memeImageFileId = photo.file_id;
         (ctx.session as any).memeImageSkipped = false;
-        // Download the image and store the buffer
         try {
           const fileLink = await ctx.telegram.getFileLink(photo.file_id);
           const response = await fetch(fileLink.href);
@@ -37,265 +38,175 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
           console.error('Failed to download meme image:', err);
           (ctx.session as any).memeImageBuffer = undefined;
         }
-        // Present usage options
-        await ctx.reply('How should the image be used in your meme?', {
+        await ctx.reply('✅ Image uploaded! Choose your meme topic:', {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '🤖 Let AI Decide (recommended)', callback_data: 'meme_image_usage_ai_decide' }],
-              [{ text: '🖼️ Use as Background', callback_data: 'meme_image_usage_background' }],
-              [{ text: '🎨 Inpaint/Modify', callback_data: 'meme_image_usage_inpaint' }],
-              [{ text: '📋 Use as Template', callback_data: 'meme_image_usage_template' }]
+              [{ text: '🚀 Crypto/Moon', callback_data: 'meme_topic_crypto' }],
+              [{ text: '💰 DeFi/Trading', callback_data: 'meme_topic_defi' }],
+              [{ text: '🎮 Gaming', callback_data: 'meme_topic_gaming' }],
+              [{ text: '📱 Tech/Meta', callback_data: 'meme_topic_tech' }],
+              [{ text: '🎯 Custom Topic', callback_data: 'meme_topic_custom' }]
             ]
           }
         });
-        return; // Wait for user to select usage
+        return;
       } else if (ctx.message && 'text' in ctx.message && ctx.message.text.trim().toLowerCase() === 'skip') {
         (ctx.session as any).memeImageFileId = undefined;
         (ctx.session as any).memeImageSkipped = true;
         (ctx.session as any).memeImageBuffer = undefined;
-        (ctx.session as any).memeImageUsage = 'none';
-        await ctx.reply(ctx.i18n.t('memes.no_image') + ' ' + ctx.i18n.t('memes.core_topic'));
-        console.log('[DEBUG] About to advance from Step 1 (skip), current step:', ctx.wizard.cursor);
-        await ctx.wizard.next();
-        console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
-        return;
-      } else {
-        // Only send the prompt once per session to avoid duplication
-        await ctx.reply(ctx.i18n.t('memes.upload_image'));
-        return;
-      }
-    },
-    // Step 2: Topic
-    async (ctx) => {
-      // Don't process if we're in a recursive middleware call
-      if (ctx.__processingFlag) return;
-      
-      if (!ctx.session.__retries) ctx.session.__retries = 0;
-      if (ctx.message && 'text' in ctx.message) {
-        (ctx.session as any).memeTopic = ctx.message.text;
-        ctx.session.__retries = 0;
-        await ctx.reply(ctx.i18n.t('memes.target_audience'));
-        console.log('[DEBUG] About to advance from Step 3, current step:', ctx.wizard.cursor);
-        await ctx.wizard.next();
-        console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
-        return;
-      } else {
-        ctx.session.__retries++;
-        if (ctx.session.__retries >= 3) {
-          await ctx.reply('Too many invalid attempts. Exiting.');
-          return ctx.scene.leave();
-        }
-        await ctx.reply(ctx.i18n.t('memes.enter_topic'));
-        return;
-      }
-    },
-    // Step 4: Audience
-    async (ctx) => {
-      // Don't process if we're in a recursive middleware call
-      if (ctx.__processingFlag) return;
-      
-      if (!ctx.session.__retries) ctx.session.__retries = 0;
-      if (ctx.message && 'text' in ctx.message) {
-        (ctx.session as any).memeAudience = ctx.message.text;
-        ctx.session.__retries = 0;
-        await ctx.reply(ctx.i18n.t('memes.mood_emotion'));
-        console.log('[DEBUG] About to advance from Step 4, current step:', ctx.wizard.cursor);
-        await ctx.wizard.next();
-        console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
-        return;
-      } else {
-        ctx.session.__retries++;
-        if (ctx.session.__retries >= 3) {
-          await ctx.reply('Too many invalid attempts. Exiting.');
-          return ctx.scene.leave();
-        }
-        await ctx.reply(ctx.i18n.t('memes.enter_audience'));
-        return;
-      }
-    },
-    // Step 5: Mood
-    async (ctx) => {
-      // Don't process if we're in a recursive middleware call
-      if (ctx.__processingFlag) return;
-      
-      if (!ctx.session.__retries) ctx.session.__retries = 0;
-      if (ctx.message && 'text' in ctx.message) {
-        (ctx.session as any).memeMood = ctx.message.text;
-        ctx.session.__retries = 0;
-        await ctx.reply(ctx.i18n.t('memes.crypto_elements'));
-        console.log('[DEBUG] About to advance from Step 5, current step:', ctx.wizard.cursor);
-        await ctx.wizard.next();
-        console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
-        return;
-      } else {
-        ctx.session.__retries++;
-        if (ctx.session.__retries >= 3) {
-          await ctx.reply('Too many invalid attempts. Exiting.');
-          return ctx.scene.leave();
-        }
-        await ctx.reply(ctx.i18n.t('memes.enter_mood'));
-        return;
-      }
-    },
-    // Step 6: Elements
-    async (ctx) => {
-      // Don't process if we're in a recursive middleware call
-      if (ctx.__processingFlag) return;
-      
-      if (ctx.message && 'text' in ctx.message && ctx.message.text.trim().toUpperCase() === 'DEBUG') {
-        console.log('[DEBUG] Full session:', ctx.session);
-        console.log('[DEBUG] Wizard step:', ctx.wizard.cursor);
-        await ctx.reply('[DEBUG] Session and wizard step logged to server.');
-        return;
-      }
-      console.log('[DEBUG] Step 6 (Elements) handler called. ctx.message:', ctx.message);
-      if (ctx.message && 'text' in ctx.message) {
-        console.log('[DEBUG] Step 6 received text:', ctx.message.text);
-        (ctx.session as any).memeElements = ctx.message.text;
-        console.log('[DEBUG] About to advance from Step 6, current step:', ctx.wizard.cursor);
-        await ctx.wizard.next();
-        console.log('[DEBUG] Advanced to step:', ctx.wizard.cursor);
-        return;
-      } else {
-        console.log('[DEBUG] Step 6 received non-text or invalid input.');
-        await ctx.reply('Please provide meme elements.');
-        return;
-      }
-    },
-    // Step 7: Inline Meme Style Selection
-    async (ctx) => {
-      if (ctx.callbackQuery && ctx.callbackQuery.data) {
-        const data = ctx.callbackQuery.data;
-        // Handle prefixed style selections 
-        if (data.startsWith('meme_style_')) {
-          const styleKey = data.replace('meme_style_', '');
-          (ctx.session as any).memeStyle = styleKey;
-          await ctx.answerCbQuery(`Style selected: ${styleKey}`);
-          return ctx.wizard.next();
-        }
-        // Direct style key selection (fallback handling for existing buttons)
-        else {
-          (ctx.session as any).memeStyle = data;
-          await ctx.answerCbQuery(`Style selected: ${data}`);
-          return ctx.wizard.next();
-        }
-      } else {
-        // Present inline button options for meme styles
-        const memeStyles = [
-          { key: 'doge', label: 'Doge Style 🐕' },
-          { key: 'wojak', label: 'Wojak/Feels Guy 😔' },
-          { key: 'distracted', label: 'Distracted Boyfriend 👀' },
-          { key: 'stonks', label: 'Stonks Guy 📈' },
-          { key: 'pepe', label: 'Pepe The Frog 🐸' },
-          { key: 'custom', label: 'Custom Style' }
-        ];
-        await ctx.reply(ctx.i18n.t('memes.style_select') || 'Choose a meme style:', {
-          reply_markup: {
-            inline_keyboard: memeStyles.map(style => ([{ 
-              text: style.label, 
-              callback_data: `meme_style_${style.key}` 
-            }]))
-          }
-        });
-        // Wait here for the user to press a button
-      }
-    },
-    // Step 8: Handle custom style input if the user selected 'custom'
-    async (ctx) => {
-      // Skip processing on callback events; the action handler already prompted
-      if (ctx.callbackQuery) return;
-      const styleKey = (ctx.session as any).memeStyle;
-      const isCustomStyle = styleKey === 'custom';
-      if (isCustomStyle) {
-        if (ctx.message && 'text' in ctx.message) {
-          (ctx.session as any).memeStyle = ctx.message.text;
-          if (!(ctx.session as any).__punchlineShown) {
-            await ctx.reply(ctx.i18n.t('memes.punchline'));
-            (ctx.session as any).__punchlineShown = true;
-          }
-          return ctx.wizard.next();
-        } else {
-          await ctx.reply(ctx.i18n.t('memes.custom_style_prompt') || 'Please describe your custom meme style:');
-        }
-      } else {
-        if (!(ctx.session as any).__punchlineShown) {
-          await ctx.reply(ctx.i18n.t('memes.punchline'));
-          (ctx.session as any).__punchlineShown = true;
-        }
-        return ctx.wizard.next();
-      }
-    },
-    // Step 9: Punchline/Caption
-    async (ctx) => {
-      if (!ctx.session.__retries) ctx.session.__retries = 0;
-      if (ctx.message && 'text' in ctx.message) {
-        (ctx.session as any).memeCatch = ctx.message.text;
-        ctx.session.__retries = 0;
-        await ctx.reply(ctx.i18n.t('memes.format'));
-        return ctx.wizard.next();
-      } else {
-        ctx.session.__retries++;
-        if (ctx.session.__retries >= 3) {
-          await ctx.reply('Too many invalid attempts. Exiting.');
-          return ctx.scene.leave();
-        }
-        await ctx.reply(ctx.i18n.t('memes.enter_punchline'));
-        return;
-      }
-    },
-    // Step 10: Format
-    async (ctx) => {
-      if (!ctx.session.__retries) ctx.session.__retries = 0;
-      if (ctx.message && 'text' in ctx.message) {
-        (ctx.session as any).memeFormat = ctx.message.text;
-        ctx.session.__retries = 0;
-        await ctx.reply(ctx.i18n.t('memes.color_mood'));
-        return ctx.wizard.next();
-      } else {
-        ctx.session.__retries++;
-        if (ctx.session.__retries >= 3) {
-          await ctx.reply('Too many invalid attempts. Exiting.');
-          return ctx.scene.leave();
-        }
-        await ctx.reply(ctx.i18n.t('memes.enter_format'));
-        return;
-      }
-    },
-    // Step 11: Color mood and summary
-    async (ctx) => {
-      if (!ctx.session.__retries) ctx.session.__retries = 0;
-      if (ctx.message && 'text' in ctx.message) {
-        (ctx.session as any).memeColor = ctx.message.text;
-        ctx.session.__retries = 0;
-        
-        // Display summary
-        let summary = ctx.i18n.t('memes.meme_brief') + '\n';
-        summary += `• ${ctx.i18n.t('memes.topic')}: ${(ctx.session as any).memeTopic || ''}\n`;
-        summary += `• ${ctx.i18n.t('memes.audience')}: ${(ctx.session as any).memeAudience || ''}\n`;
-        summary += `• ${ctx.i18n.t('memes.mood')}: ${(ctx.session as any).memeMood || ''}\n`;
-        summary += `• ${ctx.i18n.t('memes.elements')}: ${(ctx.session as any).memeElements || ''}\n`;
-        summary += `• ${ctx.i18n.t('memes.punchline_caption')}: ${(ctx.session as any).memeCatch || ''}\n`;
-        summary += `• ${ctx.i18n.t('memes.format_type')}: ${(ctx.session as any).memeFormat || ''}\n`;
-        summary += `• ${ctx.i18n.t('memes.color')}: ${(ctx.session as any).memeColor || ''}`;
-        
-        await ctx.reply(summary);
-        await ctx.reply(ctx.i18n.t('memes.select_favorite') || 'Ready to generate your meme? Choose an option:', {
+        await ctx.reply('✅ No image! Choose your meme topic:', {
           reply_markup: {
             inline_keyboard: [
-              [{ text: ctx.i18n.t('memes.generate_meme'), callback_data: 'confirm_meme' }],
-              [{ text: ctx.i18n.t('memes.restart'), callback_data: 'restart_meme' }]
+              [{ text: '🚀 Crypto/Moon', callback_data: 'meme_topic_crypto' }],
+              [{ text: '💰 DeFi/Trading', callback_data: 'meme_topic_defi' }],
+              [{ text: '🎮 Gaming', callback_data: 'meme_topic_gaming' }],
+              [{ text: '📱 Tech/Meta', callback_data: 'meme_topic_tech' }],
+              [{ text: '🎯 Custom Topic', callback_data: 'meme_topic_custom' }]
             ]
           }
         });
-        
+        await ctx.wizard.next();
         return;
       } else {
-        ctx.session.__retries++;
-        if (ctx.session.__retries >= 3) {
-          await ctx.reply('Too many invalid attempts. Exiting.');
-          return ctx.scene.leave();
+        await ctx.reply('🖼️ Please upload an image or type "skip"');
+        return;
+      }
+    },
+    // Step 2: Mood selection
+    async (ctx) => {
+      if (ctx.callbackQuery && ctx.callbackQuery.data?.startsWith('meme_topic_')) {
+        const topic = ctx.callbackQuery.data.replace('meme_topic_', '');
+        (ctx.session as any).memeTopic = topic;
+        await ctx.answerCbQuery(`Topic: ${topic}`);
+        
+        if (topic === 'custom') {
+          await ctx.reply('✍️ What\'s your custom topic? (e.g., "Bitcoin", "NFTs", "AI")');
+          return;
         }
-        await ctx.reply(ctx.i18n.t('memes.enter_color'));
+        
+        await ctx.reply('😄 Choose the mood:', {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔥 Hype/Excited', callback_data: 'meme_mood_hype' }],
+              [{ text: '😏 Sarcastic/Funny', callback_data: 'meme_mood_sarcastic' }],
+              [{ text: '😢 Sad/Disappointed', callback_data: 'meme_mood_sad' }],
+              [{ text: '🤔 Confused/Surprised', callback_data: 'meme_mood_confused' }],
+              [{ text: '🎯 Custom Mood', callback_data: 'meme_mood_custom' }]
+            ]
+          }
+        });
+        return;
+      } else if (ctx.message && 'text' in ctx.message) {
+        (ctx.session as any).memeTopic = ctx.message.text;
+        await ctx.reply('😄 Choose the mood:', {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔥 Hype/Excited', callback_data: 'meme_mood_hype' }],
+              [{ text: '😏 Sarcastic/Funny', callback_data: 'meme_mood_sarcastic' }],
+              [{ text: '😢 Sad/Disappointed', callback_data: 'meme_mood_sad' }],
+              [{ text: '🤔 Confused/Surprised', callback_data: 'meme_mood_confused' }],
+              [{ text: '🎯 Custom Mood', callback_data: 'meme_mood_custom' }]
+            ]
+          }
+        });
+        return;
+      } else {
+        await ctx.reply('Please choose a topic first');
+        return;
+      }
+    },
+    // Step 3: Style selection
+    async (ctx) => {
+      if (ctx.callbackQuery && ctx.callbackQuery.data?.startsWith('meme_mood_')) {
+        const mood = ctx.callbackQuery.data.replace('meme_mood_', '');
+        (ctx.session as any).memeMood = mood;
+        await ctx.answerCbQuery(`Mood: ${mood}`);
+        
+        if (mood === 'custom') {
+          await ctx.reply('✍️ What mood? (e.g., "angry", "happy", "shocked")');
+          return;
+        }
+        
+        await ctx.reply('🎨 Choose meme style:', {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🐕 Doge Style', callback_data: 'meme_style_doge' }],
+              [{ text: '😔 Wojak/Feels', callback_data: 'meme_style_wojak' }],
+              [{ text: '👀 Distracted BF', callback_data: 'meme_style_distracted' }],
+              [{ text: '📈 Stonks Guy', callback_data: 'meme_style_stonks' }],
+              [{ text: '🐸 Pepe', callback_data: 'meme_style_pepe' }],
+              [{ text: '🎯 Custom Style', callback_data: 'meme_style_custom' }]
+            ]
+          }
+        });
+        return;
+      } else if (ctx.message && 'text' in ctx.message) {
+        (ctx.session as any).memeMood = ctx.message.text;
+        await ctx.reply('🎨 Choose meme style:', {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🐕 Doge Style', callback_data: 'meme_style_doge' }],
+              [{ text: '😔 Wojak/Feels', callback_data: 'meme_style_wojak' }],
+              [{ text: '👀 Distracted BF', callback_data: 'meme_style_distracted' }],
+              [{ text: '📈 Stonks Guy', callback_data: 'meme_style_stonks' }],
+              [{ text: '🐸 Pepe', callback_data: 'meme_style_pepe' }],
+              [{ text: '🎯 Custom Style', callback_data: 'meme_style_custom' }]
+            ]
+          }
+        });
+        return;
+      } else {
+        await ctx.reply('Please choose a mood first');
+        return;
+      }
+    },
+    // Step 4: Final confirmation and generation
+    async (ctx) => {
+      if (ctx.callbackQuery && ctx.callbackQuery.data?.startsWith('meme_style_')) {
+        const style = ctx.callbackQuery.data.replace('meme_style_', '');
+        (ctx.session as any).memeStyle = style;
+        await ctx.answerCbQuery(`Style: ${style}`);
+        
+        if (style === 'custom') {
+          await ctx.reply('✍️ Describe your custom style (e.g., "minimalist", "vintage", "anime")');
+          return;
+        }
+        
+        // Show summary and generate
+        const topic = (ctx.session as any).memeTopic || 'crypto';
+        const mood = (ctx.session as any).memeMood || 'hype';
+        const hasImage = !(ctx.session as any).memeImageSkipped;
+        
+        await ctx.reply(`🎯 **Your Meme Brief:**\n\n• Topic: ${topic}\n• Mood: ${mood}\n• Style: ${style}\n• Image: ${hasImage ? 'Yes' : 'No'}`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 Generate Meme!', callback_data: 'confirm_meme' }],
+              [{ text: '🔄 Start Over', callback_data: 'restart_meme' }]
+            ]
+          }
+        });
+        return;
+      } else if (ctx.message && 'text' in ctx.message) {
+        (ctx.session as any).memeStyle = ctx.message.text;
+        
+        // Show summary and generate
+        const topic = (ctx.session as any).memeTopic || 'crypto';
+        const mood = (ctx.session as any).memeMood || 'hype';
+        const hasImage = !(ctx.session as any).memeImageSkipped;
+        
+        await ctx.reply(`🎯 **Your Meme Brief:**\n\n• Topic: ${topic}\n• Mood: ${mood}\n• Style: ${ctx.message.text}\n• Image: ${hasImage ? 'Yes' : 'No'}`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 Generate Meme!', callback_data: 'confirm_meme' }],
+              [{ text: '🔄 Start Over', callback_data: 'restart_meme' }]
+            ]
+          }
+        });
+        return;
+      } else {
+        await ctx.reply('Please choose a style first');
         return;
       }
     }
@@ -303,6 +214,8 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
   
   // Add an enter handler to reset session state
   scene.enter(async (ctx) => {
+    console.log('[MemeWizard] Scene entered for user:', ctx.from?.id);
+    
     // Reset all meme-related session variables, including legacy keys
     const memeKeys = [
       'memeImageFileId',
@@ -318,38 +231,20 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
       'memeStyleDesc',
       'memeText',
       '__uploadMessageShown',
-      '__punchlineShown'
+      '__punchlineShown',
+      'memeChoiceMade'
     ];
     memeKeys.forEach(key => delete (ctx.session as any)[key]);
     
-    // Save and clear the flag to avoid reusing it
-    const fromMemeStart = (ctx.session as any).__fromMemeStart;
-    delete (ctx.session as any).__fromMemeStart;
-    
-    // Check if the user has previous meme parameters
-    if (ctx.from?.id) {
-      try {
-        const hasLastParams = await mongodbService.getLastMemeParams(ctx.from.id);
-        
-        if (hasLastParams) {
-          // If they have previous parameters, offer to reload WITHOUT showing "Upload your image" message
-          await ctx.reply('You have previous meme settings:', {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '🔄 Use Previous Meme Settings', callback_data: 'reload_last_meme' }],
-                [{ text: '🆕 Create New Meme', callback_data: 'new_meme' }]
-              ]
-            }
-          });
-          return;
-        }
-      } catch (error) {
-        console.error('Error checking for previous meme parameters:', error);
-        // Continue with normal flow if there's an error
+    console.log('[MemeWizard] Starting normal flow - showing upload prompt');
+    // Always start with the normal flow - show upload prompt immediately
+    await ctx.reply('🖼️ Upload an image for your meme (or type "skip"):', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '⏭️ Skip Image', callback_data: 'meme_skip_image' }]
+        ]
       }
-    }
-    
-    // If no previous parameters or error, the wizard step 1 will handle showing the upload message
+    });
   });
   
   // Register action handlers
@@ -375,7 +270,8 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
     }
     
     const cost = !user.freeGenerationUsed ? 0 : calculateMemeCost(quality);
-    if (cost > 0 && user.starBalance < cost) {
+    // Skip credit check in testing mode
+    if (process.env.TESTING !== 'true' && cost > 0 && user.starBalance < cost) {
       await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
       return ctx.scene.leave();
     }
@@ -399,56 +295,34 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
       await mongodbService.setLastMemeParams(ctx.from.id, memeParams);
     }
     
-    // Build the meme prompt from session
-    let memePrompt = `Create a viral crypto meme`;
-    if ((ctx.session as any).memeImageBuffer && (ctx.session as any).memeImageUsage) {
-      const usage = (ctx.session as any).memeImageUsage;
-      if (usage === 'ai_decide') {
-        memePrompt += `. Use the uploaded image in the most meme-appropriate way (background, template, or inpainting) based on the meme style and content.`;
-      } else if (usage === 'background') {
-        memePrompt += `. Use the uploaded image as the meme background. Overlay all text and elements, do not modify the image content.`;
-      } else if (usage === 'inpaint') {
-        memePrompt += `. Modify the uploaded image to fit the meme joke, but keep the main subject recognizable.`;
-      } else if (usage === 'template') {
-        memePrompt += `. Use the uploaded image as a classic meme template. Place text and elements in standard meme locations for this format.`;
-      }
-    }
-    if ((ctx.session as any).memeTopic) memePrompt += ` about ${(ctx.session as any).memeTopic}`;
-    if ((ctx.session as any).memeAudience) memePrompt += ` for ${(ctx.session as any).memeAudience}`;
-    if ((ctx.session as any).memeMood) memePrompt += ` in a ${(ctx.session as any).memeMood} style`;
-    if ((ctx.session as any).memeElements) memePrompt += ` with ${(ctx.session as any).memeElements}`;
-    if ((ctx.session as any).memeCatch && (ctx.session as any).memeCatch.toLowerCase() !== 'skip') {
-      memePrompt += `. Caption: ${(ctx.session as any).memeCatch}`;
-    }
-    if ((ctx.session as any).memeFormat && (ctx.session as any).memeFormat.toLowerCase() !== 'other') {
-      memePrompt += `. Format: ${(ctx.session as any).memeFormat}`;
-    }
-    if ((ctx.session as any).memeColor && (ctx.session as any).memeColor.toLowerCase() !== 'skip') {
-      memePrompt += `. Color mood: ${(ctx.session as any).memeColor}`;
-    }
-    if ((ctx.session as any).memeStyleDesc) memePrompt += `. Style: ${(ctx.session as any).memeStyleDesc}`;
-    else if ((ctx.session as any).memeStyle) memePrompt += `. Style: ${(ctx.session as any).memeStyle}`;
-    memePrompt += ".";
-    memePrompt += " CRITICAL RULE: All text MUST be positioned well within the image boundaries with substantial margins (at least 10% of image height from top and bottom edges). Absolutely NO text or important elements should be cut off or cropped at the edges. Place text centrally and ensure there is ample padding around all text elements. Text should be clearly legible with high contrast against the background. For headlines or main text, position them in the middle 70% of the image area. Ensure correct spelling and grammar for all text. Do not generate any random characters or watermarks. Avoid weird hands, faces, or other parts. No visual artifacts, no borders, and ensure high visual clarity. The meme should look like a professional, well-composed poster or social media meme.";
+    // Build simplified meme prompt
+    const session = ctx.session as any;
+    const topic = session.memeTopic || 'crypto';
+    const mood = session.memeMood || 'hype';
+    const style = session.memeStyle || 'doge';
+    const hasImage = session.memeImageBuffer ? 'with uploaded image' : 'original meme';
+    
+    // Create simple, effective prompt
+    const simplePrompt = `Create a ${mood} ${topic} meme in ${style} style, ${hasImage}. Make it funny and shareable with clear text.`;
     
     try {
-      // Prepare cost message
+      // Prepare cost message with manual interpolation fallback
       const costMessage = cost > 0 
-        ? ctx.i18n.t('memes.stars_deducted', { totalCost: cost }) 
+        ? `${cost} stars will be deducted from your balance.`
         : ctx.i18n.t('memes.free_generation');
       
       await imageQueue.add('generate-meme', {
-        prompt: memePrompt,
+        prompt: simplePrompt,
         userId: ctx.from?.id,
         chatId: ctx.chat?.id,
         session: ctx.session,
         freeGenerationUsed: user.freeGenerationUsed,
         updateUser: true,
-        quality: quality,  // Use standardized quality for DB
-        format: memeFormat, // Keep original format for reference
+        quality: quality,
+        format: memeFormat,
         cost: cost,
         imageBuffer: (ctx.session as any).memeImageBuffer,
-        useDSPy: false // Disable DSPy - use basic prompts
+        useDSPy: false
       }, { timeout: 300000 });
       
       // Start periodic 'still working' updates with longer intervals and a maximum count
@@ -470,8 +344,12 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
         }
       }, 120000); // Increase to 2 minutes between updates (was 60000 = 1 minute)
       
-      ctx.session.__memeStillWorkingInterval = intervalId;
-      await ctx.reply(ctx.i18n.t('memes.request_queued', { costMessage }));
+      // Store interval globally instead of in session
+      if (ctx.from?.id) {
+        addUserInterval(ctx.from.id, intervalId);
+      }
+      const queuedMsg = ctx.i18n.t('memes.request_queued').replace('{{costMessage}}', costMessage);
+      await ctx.reply(queuedMsg);
     } catch (err) {
       const ref = logErrorWithRef(err);
       await ctx.reply(ctx.i18n.t('errors.generation_failed') + ` (Ref: ${ref})`);
@@ -550,106 +428,106 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
     });
   });
   
-  // Add a new action to reload previous meme parameters
-  scene.action('reload_last_meme', async (ctx) => {
-    await ctx.answerCbQuery();
-    
-    if (!ctx.from?.id) {
-      await ctx.reply('Could not identify your user account.');
-      return;
-    }
-    
-    // Try to get the last meme parameters
-    const lastParams = await mongodbService.getLastMemeParams(ctx.from.id);
-    
-    if (!lastParams) {
-      await ctx.reply('No previous meme parameters found. Please create a new meme from scratch.');
-      return;
-    }
-    
-    // Restore the parameters to the session
-    Object.assign(ctx.session, lastParams);
-    
-    // Skip to the summary step
-    ctx.wizard.selectStep(11); // Assuming step 11 is the summary step
-    
-    // Display summary of loaded parameters
-    let summary = ctx.i18n.t('memes.meme_brief') + '\n';
-    summary += `• ${ctx.i18n.t('memes.topic')}: ${lastParams.memeTopic || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.audience')}: ${lastParams.memeAudience || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.mood')}: ${lastParams.memeMood || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.elements')}: ${lastParams.memeElements || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.punchline_caption')}: ${lastParams.memeCatch || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.format_type')}: ${lastParams.memeFormat || ''}\n`;
-    summary += `• ${ctx.i18n.t('memes.color')}: ${lastParams.memeColor || ''}`;
-    
-    await ctx.reply('Loaded your last meme settings:\n\n' + summary);
-    await ctx.reply('Ready to generate your meme?', {
+
+  // Add action handlers for skip image
+  scene.action('meme_skip_image', async (ctx) => {
+    (ctx.session as any).memeImageFileId = undefined;
+    (ctx.session as any).memeImageSkipped = true;
+    (ctx.session as any).memeImageBuffer = undefined;
+    await ctx.answerCbQuery('Skipped image!');
+    await ctx.reply('✅ No image! Choose your meme topic:', {
       reply_markup: {
         inline_keyboard: [
-          [{ text: ctx.i18n.t('memes.generate_meme'), callback_data: 'confirm_meme' }],
-          [{ text: ctx.i18n.t('memes.restart'), callback_data: 'restart_meme' }]
+          [{ text: '🚀 Crypto/Moon', callback_data: 'meme_topic_crypto' }],
+          [{ text: '💰 DeFi/Trading', callback_data: 'meme_topic_defi' }],
+          [{ text: '🎮 Gaming', callback_data: 'meme_topic_gaming' }],
+          [{ text: '📱 Tech/Meta', callback_data: 'meme_topic_tech' }],
+          [{ text: '🎯 Custom Topic', callback_data: 'meme_topic_custom' }]
         ]
       }
     });
-  });
-
-  // Handle the new_meme action
-  scene.action('new_meme', async (ctx) => {
-    await ctx.answerCbQuery();
-    // Set the flag to indicate we've already shown the upload message
-    (ctx.session as any).__uploadMessageShown = true;
-    // Show the upload message manually
-    await ctx.reply(ctx.i18n.t('memes.upload_image'));
-    // Go to step 1 (upload image handling)
-    ctx.wizard.selectStep(1);
-  });
-  
-  // Add action handlers for image usage selection
-  scene.action(/^meme_image_usage_(ai_decide|background|inpaint|template)$/, async (ctx) => {
-    const usage = ctx.match[1];
-    (ctx.session as any).memeImageUsage = usage;
-    await ctx.answerCbQuery('Image usage set!');
-    await ctx.reply(ctx.i18n.t('memes.core_topic'));
     return ctx.wizard.next();
   });
   
-  // Add a middleware to handle the "need to type twice" issue specifically for the double input
-  scene.use(async (ctx, next) => {
-    // Only process text messages, and only for the problematic step
-    if (ctx.message && 'text' in ctx.message && ctx.wizard.cursor === 5) {
-      // Set a flag to prevent recursive processing
-      if (!ctx.__processingFlag) {
-        await next();
-        
-        // After the step 6 handler runs, check if we've advanced to step 7
-        if (ctx.wizard.cursor === 6) {
-          // Store the text message for re-use
-          const textMessage = ctx.message.text;
-          
-          // Set a processing flag for the recursion detection
-          ctx.__processingFlag = true;
-          
-          // Clear the message to simulate a fresh context
-          delete ctx.message; 
-          
-          // We need to explicitly set the step for the style selection
-          await scene.middleware()(ctx);
-          
-          // Reset the flag
-          ctx.__processingFlag = false;
-          
-          // Log for debugging
-          console.log('[DEBUG] Simulating next step handler automatically.');
-        }
-      } else {
-        // If we're in a recursive call, just process normally
-        await next();
-      }
-    } else {
-      await next();
+  // Add action handlers for topic selection
+  scene.action(/^meme_topic_(crypto|defi|gaming|tech|custom)$/, async (ctx) => {
+    const topic = ctx.match[1];
+    (ctx.session as any).memeTopic = topic;
+    await ctx.answerCbQuery(`Topic: ${topic}`);
+    
+    if (topic === 'custom') {
+      await ctx.reply('✍️ What\'s your custom topic? (e.g., "Bitcoin", "NFTs", "AI")');
+      return;
     }
+    
+    await ctx.reply('😄 Choose the mood:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔥 Hype/Excited', callback_data: 'meme_mood_hype' }],
+          [{ text: '😏 Sarcastic/Funny', callback_data: 'meme_mood_sarcastic' }],
+          [{ text: '😢 Sad/Disappointed', callback_data: 'meme_mood_sad' }],
+          [{ text: '🤔 Confused/Surprised', callback_data: 'meme_mood_confused' }],
+          [{ text: '🎯 Custom Mood', callback_data: 'meme_mood_custom' }]
+        ]
+      }
+    });
+    return ctx.wizard.next();
   });
+
+  // Add action handlers for mood selection
+  scene.action(/^meme_mood_(hype|sarcastic|sad|confused|custom)$/, async (ctx) => {
+    const mood = ctx.match[1];
+    (ctx.session as any).memeMood = mood;
+    await ctx.answerCbQuery(`Mood: ${mood}`);
+    
+    if (mood === 'custom') {
+      await ctx.reply('✍️ What mood? (e.g., "angry", "happy", "shocked")');
+      return;
+    }
+    
+    await ctx.reply('🎨 Choose meme style:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🐕 Doge Style', callback_data: 'meme_style_doge' }],
+          [{ text: '😔 Wojak/Feels', callback_data: 'meme_style_wojak' }],
+          [{ text: '👀 Distracted BF', callback_data: 'meme_style_distracted' }],
+          [{ text: '📈 Stonks Guy', callback_data: 'meme_style_stonks' }],
+          [{ text: '🐸 Pepe', callback_data: 'meme_style_pepe' }],
+          [{ text: '🎯 Custom Style', callback_data: 'meme_style_custom' }]
+        ]
+      }
+    });
+    return ctx.wizard.next();
+  });
+
+  // Add action handlers for style selection
+  scene.action(/^meme_style_(doge|wojak|distracted|stonks|pepe|custom)$/, async (ctx) => {
+    const style = ctx.match[1];
+    (ctx.session as any).memeStyle = style;
+    await ctx.answerCbQuery(`Style: ${style}`);
+    
+    if (style === 'custom') {
+      await ctx.reply('✍️ Describe your custom style (e.g., "minimalist", "vintage", "anime")');
+      return;
+    }
+    
+    // Show summary and generate
+    const topic = (ctx.session as any).memeTopic || 'crypto';
+    const mood = (ctx.session as any).memeMood || 'hype';
+    const hasImage = !(ctx.session as any).memeImageSkipped;
+    
+    await ctx.reply(`🎯 **Your Meme Brief:**\n\n• Topic: ${topic}\n• Mood: ${mood}\n• Style: ${style}\n• Image: ${hasImage ? 'Yes' : 'No'}`, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🚀 Generate Meme!', callback_data: 'confirm_meme' }],
+          [{ text: '🔄 Start Over', callback_data: 'restart_meme' }]
+        ]
+      }
+    });
+    return ctx.wizard.next();
+  });
+  
   
   // Add a leave handler to properly clean up the scene
   scene.leave(async (ctx) => {

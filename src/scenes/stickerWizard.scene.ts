@@ -2,12 +2,14 @@
 import { Scenes } from 'telegraf';
 import { BotContext } from '../types';
 import { OpenAIService } from '../services/openai.service';
+import { FluxService } from '../services/flux.service';
 import sizeOf from 'image-size';
 import sharp from 'sharp';
 import createBackgroundRemoval from '@imgly/background-removal-node';
 import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
+import { addUserInterval } from '../utils/intervalManager';
 
 function getStickerPackName(ctx: BotContext) {
   const username = ctx.from?.username || `user${ctx.from?.id}`;
@@ -148,18 +150,16 @@ function logErrorWithRef(error: any) {
   return ref;
 }
 
-export function createStickerWizardScene(openaiService: OpenAIService): Scenes.WizardScene<BotContext> {
+export function createStickerWizardScene(openaiService: OpenAIService, fluxService: FluxService): Scenes.WizardScene<BotContext> {
   const scene = new Scenes.WizardScene<BotContext>(
     'stickerWizard',
-    // Step 1: Show upload message and wait for image or skip
+    // Step 1: Logo upload or skip
     async (ctx) => {
-      // Check if this is the initial entry (not from a user input)
-      if (!ctx.message) {
-        await ctx.reply(ctx.i18n.t('stickers.upload_image'));
-        return; // Wait for user input
-      }
-      
-      // Handle user input in step 1
+      await ctx.reply(ctx.i18n.t('stickers.upload_image'));
+      return ctx.wizard.next();
+    },
+    // Step 2: Style selection
+    async (ctx) => {
       if (ctx.message && 'photo' in ctx.message) {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         (ctx.session as any).stickerImageFileId = photo.file_id;
@@ -176,7 +176,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         return;
       }
     },
-    // Step 2: Phrases/emojis
+    // Step 3: Phrases/emojis
     async (ctx) => {
       if (ctx.message && 'text' in ctx.message) {
         (ctx.session as any).stickerStyle = ctx.message.text;
@@ -186,7 +186,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         await ctx.reply(ctx.i18n.t('stickers.enter_style'));
       }
     },
-    // Step 3: Sticker count
+    // Step 4: Sticker count
     async (ctx) => {
       if (ctx.message && 'text' in ctx.message) {
         (ctx.session as any).stickerPhrases = ctx.message.text;
@@ -196,7 +196,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         await ctx.reply(ctx.i18n.t('stickers.enter_phrases'));
       }
     },
-    // Step 4: Generate stickers (with batching/throttling and Telegram upload)
+    // Step 5: Generate stickers (with batching/throttling and Telegram upload)
     async (ctx) => {
       // Add retry counter for invalid input
       if (!ctx.session.__retries) ctx.session.__retries = 0;
@@ -213,6 +213,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         const num = parseInt(ctx.message.text);
         if (!isNaN(num) && num >= 1 && num <= 100) {
           count = num;
+          (ctx.session as any).stickerCount = count; // Persist to session
         } else {
           ctx.session.__retries++;
           if (ctx.session.__retries >= 3) {
@@ -223,6 +224,7 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
           return;
         }
       }
+      (ctx.session as any).stickerCount = count; // Persist even if default
       ctx.session.__retries = 0;
       
       // Display summary
@@ -246,13 +248,14 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         totalCost = count * costPerSticker;
       }
       
-      // Check if user has enough stars
-      if (totalCost > 0 && user.starBalance < totalCost) {
+      // Skip credit check in testing mode
+      if (process.env.TESTING !== 'true' && totalCost > 0 && user.starBalance < totalCost) {
         await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
         return ctx.scene.leave();
       }
       
       // Ask for confirmation
+      console.log(`[StickerWizard] summary ready for user=${ctx.from?.id}, count=${count}, totalCost=${totalCost}, testing=${process.env.TESTING}`);
       await ctx.reply(
         `${count} ${ctx.i18n.t('stickers.count')}. ${totalCost > 0 ? ctx.i18n.t('stickers.stars_deducted', { totalCost }) : ctx.i18n.t('stickers.free_generation')}`,
         {
@@ -267,8 +270,9 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
     }
   );
   
-  // Add an enter handler to reset session state and show initial message
+  // Add an enter handler to reset session state
   scene.enter(async (ctx) => {
+    console.log(`[StickerWizard] enter: user=${ctx.from?.id}`);
     // Reset all sticker-related session data
     const stickerKeys = [
       'stickerImageFileId', 'stickerImageSkipped', 'stickerStyle', 
@@ -280,15 +284,13 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
       delete (ctx.session as any)[key];
     }
     
-    // Immediately show the upload message when entering the scene
-    await ctx.reply(ctx.i18n.t('stickers.upload_image'));
-    
     // Don't use selectStep here - let the scene start naturally
-    // The first handler will be called automatically when user responds
+    // The first handler will be called automatically
   });
   
   // Confirm sticker generation
   scene.action('confirm_stickers', async (ctx) => {
+    console.log(`[StickerWizard] confirm_stickers: user=${ctx.from?.id}`);
     await ctx.answerCbQuery();
     const user = ctx.dbUser;
     if (!user) {
@@ -318,20 +320,17 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
       totalCost = count * costPerSticker;
     }
     
-    // Check if user has enough stars again
-    if (totalCost > 0 && user.starBalance < totalCost) {
+    // Check if user has enough stars again (skip in testing mode)
+    if (process.env.TESTING !== 'true' && totalCost > 0 && user.starBalance < totalCost) {
       await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
       return ctx.scene.leave();
     }
     
     await ctx.reply(ctx.i18n.t('stickers.generating'));
     
-    // Prepare the prompt
-    let basePrompt = `Create a ${style} sticker`;
-    if (phrases.toLowerCase() !== 'none' && phrases.trim() !== '') {
-      basePrompt += ` with the text/phrases/emojis: ${phrases}`;
-    }
-    basePrompt += `. Make it suitable for a Telegram sticker pack. The sticker should be bold, colorful, eye-catching, and have a transparent background. Don't crop any important elements. Don't include text that is cut off. Make sure any text is easily readable.`;
+    // Build comprehensive sticker prompt using FLUX service
+    const session = ctx.session as any;
+    const comprehensivePrompt = fluxService.buildStickerPrompt(session);
     
     try {
       // Prepare cost message for the queue message
@@ -340,8 +339,9 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
         : ctx.i18n.t('stickers.free_generation');
       
       // Queue all the stickers for generation with timeout
+      console.log(`[StickerWizard] queueing generate-sticker: user=${ctx.from?.id}, count=${count}, freeGenerationUsed=${freeGenerationUsed}, cost=${totalCost}`);
       await imageQueue.add('generate-sticker', {
-        prompt: basePrompt,
+        prompt: comprehensivePrompt,
         userId: ctx.from?.id,
         chatId: ctx.chat?.id,
         count,
@@ -358,7 +358,10 @@ export function createStickerWizardScene(openaiService: OpenAIService): Scenes.W
           ctx.telegram.sendMessage(chatId, 'Still working on your stickers...');
         }
       }, 60000);
-      ctx.session.__stickerStillWorkingInterval = intervalId;
+      // Store interval globally instead of in session
+      if (ctx.from?.id) {
+        addUserInterval(ctx.from.id, intervalId);
+      }
       await ctx.reply(ctx.i18n.t('stickers.request_queued', { costMessage }));
       await ctx.scene.leave();
     } catch (error) {

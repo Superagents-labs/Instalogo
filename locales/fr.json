@@ -1,8 +1,8 @@
 {
   "welcome": {
-    "title": "BrandForge Bot 🤖",
+    "title": "Instalogo Bot 🤖",
     "what_to_do": "Que souhaitez-vous faire ?",
-    "star_balance": "Vos Crédits",
+    "star_balance": "Votre Solde d'Étoiles",
     "built_by": "Créé par SuperAgent Labs"
   },
   "menu": {
@@ -18,7 +18,6 @@
   "general": {
     "photo_received": "Photo reçue ! (debug)",
     "please_upload": "Veuillez télécharger une image PNG (512x512, <512KB) à utiliser comme sticker de démarrage !",
-    "please_describe": "Veuillez décrire comment vous souhaitez modifier l'image :",
     "starter_pack_created": "Votre pack de stickers de démarrage est créé ! [Voir ici](https://t.me/addstickers/{{packName}})",
     "processing_image": "Traitement de votre image pour la création de stickers...",
     "image_queued": "Votre image a été mise en file d'attente pour modification ! Je vous informerai quand elle sera prête.",
@@ -81,7 +80,9 @@
     "color": "Couleur",
     "generate_meme": "Générer un Mème 😂",
     "generating": "Génération de votre mème en cours...",
-    "request_queued": "Votre demande de génération de mème est en file d'attente. {{costMessage}} Vous serez notifié quand le traitement commencera."
+    "request_queued": "Votre demande de génération de mème est en file d'attente. {{costMessage}} Vous serez notifié quand le traitement commencera.",
+    "free_generation": "Votre génération gratuite sera utilisée.",
+    "stars_deducted": "{{totalCost}} étoiles seront déduites de votre solde."
   },
   "logo": {
     "brand_name": "Quel est le nom de votre marque ou projet ? (Orthographe et ponctuation exactes)",
@@ -101,6 +102,8 @@
     "generating": "Génial ! Génération de vos concepts de logo en cours...",
     "generating_based_on": "Génération de vos concepts de logo basée sur vos réponses...",
     "request_queued": "Votre demande de génération de logo est en file d'attente. {{costMessage}} Vous serez notifié quand le traitement commencera.",
+    "free_generation": "Votre génération gratuite sera utilisée.",
+    "stars_deducted": "{{totalCost}} étoiles seront déduites de votre solde.",
     "please_answer_text": "Veuillez répondre en utilisant du texte.",
     "first_tell_name": "Veuillez d'abord me dire le nom de votre entreprise.",
     "whats_business_name": "🎨 Super ! Quel est le nom de votre entreprise ?",
@@ -132,16 +135,14 @@
     "back_to_history": "Retour à l'Historique"
   },
   "stars": {
-    "choose_amount": "Choisissez combien de crédits logo vous souhaitez acheter :",
-    "stars_100": "100 Crédits - 100 ⭐",
-    "stars_500": "500 Crédits - 500 ⭐",
-    "stars_1000": "1000 Crédits - 950 ⭐ (5% réduction)",
-    "stars_2500": "2500 Crédits - 2250 ⭐ (10% réduction)",
-    "how_to_buy": "💡 Pas d'Étoiles ? Tapez simplement Payer et Telegram vous permettra d'acheter des Étoiles instantanément !",
+    "choose_amount": "Choisissez combien d'étoiles vous souhaitez acheter :",
+    "stars_100": "100 Étoiles - 4,99$",
+    "stars_500": "500 Étoiles - 19,99$",
+    "stars_1000": "1000 Étoiles - 34,99$",
+    "stars_2500": "2500 Étoiles - 69,99$",
     "payment_unavailable": "Désolé, le système de paiement est temporairement indisponible. Veuillez réessayer plus tard.",
-    "payment_successful": "✅ Paiement réussi ! {{amount}} crédits logo ajoutés. Solde : {{balance}} crédits.",
+    "payment_successful": "✅ Paiement réussi ! {{amount}} ⭐ étoiles ont été ajoutées à votre solde. Votre nouveau solde est de {{balance}} ⭐ étoiles.",
     "user_not_found": "Utilisateur non trouvé. Veuillez contacter le support.",
-    "error_updating": "Paiement reçu mais une erreur s'est produite lors de la mise à jour de votre solde. Veuillez contacter le support.",
-    "stars_deducted": "{{totalCost}} crédits seront utilisés pour cette génération."
+    "error_updating": "Paiement reçu mais une erreur s'est produite lors de la mise à jour de votre solde. Veuillez contacter le support."
   }
 } 

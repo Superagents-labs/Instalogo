@@ -14,49 +14,22 @@ import { sendMainMenu } from '../index';
  * This is a local version to avoid circular dependencies with index.ts
  */
 async function clearSessionForSceneSwitch(ctx: BotContext) {
-  console.log('🧹 clearSessionForSceneSwitch called');
-  console.log('🧹 Current scene:', ctx.scene?.current);
-  
   if (ctx.scene && ctx.scene.current) {
     // Preserve language setting if available
     const language = ctx.i18n?.locale();
     
-    console.log('🧹 Leaving current scene:', ctx.scene.current);
     await ctx.scene.leave();
     
-    // Clear all wizard-specific session data to prevent overlap
-    const allWizardKeys = [
-      // Logo wizard keys
-      'name', 'industry', 'stylePreferences', 'selectedImageIndex', 'generatedImages',
-      // Sticker wizard keys
-      'stickerImageFileId', 'stickerImageSkipped', 'stickerStyle', 
-      'stickerPhrases', 'stickerCount', 'selectedStickers',
-      // Meme wizard keys
-      'memeImageFileId', 'memeImageSkipped', 'memeTopic', 
-      'memeAudience', 'memeMood', 'memeElements', 
-      'memeCatch', 'memeFormat', 'memeColor', 'memeStyle', 
-      'memeStyleDesc', 'memeText', 'memeImageBuffer', 'memeImageUsage',
-      '__uploadMessageShown', '__punchlineShown',
-      // Edit flags that persist outside scenes
-      'awaitingEditPrompt', 'stickerEditPrompt', 
-      'awaitingStickerEdit', 'awaitingStarterPackImage'
-    ];
-    
-    // Save important session values
+    // Save __scenes to preserve Telegraf's scene state handling
     const scenes = ctx.session.__scenes;
     
-    console.log('🧹 Clearing wizard keys:', allWizardKeys.length, 'keys');
-    // Clear the session completely except for essential system properties
-    ctx.session = { __scenes: scenes || { current: null, state: {} } } as any;
+    // Reset session but keep Telegraf's scene handling structures
+    ctx.session = { __scenes: scenes } as any;
     
     // Restore language setting
     if (language && ctx.i18n) {
       ctx.i18n.locale(language);
     }
-    
-    console.log('🧹 Session cleared for scene switch - all wizard data removed');
-  } else {
-    console.log('🧹 No current scene to leave');
   }
 }
 
@@ -71,11 +44,7 @@ export function setupCallbackHandlers(
 ): void {
   // Handle main menu return
   bot.action('main_menu', async (ctx: BotContext) => {
-    try {
-      await ctx.answerCbQuery();
-    } catch (error) {
-      console.log('⚠️ answerCbQuery failed for main menu:', error instanceof Error ? error.message : String(error));
-    }
+    await ctx.answerCbQuery();
     await ctx.reply(
       'Welcome back to the main menu! What would you like to do?',
       {
@@ -92,42 +61,25 @@ export function setupCallbackHandlers(
   
   // Handle logo generation menu entry
   bot.action('generate_logo', async (ctx: BotContext) => {
-    try {
-      await ctx.answerCbQuery();
-    } catch (error) {
-      console.log('⚠️ answerCbQuery failed for logo generation:', error instanceof Error ? error.message : String(error));
-    }
+    await ctx.answerCbQuery();
     await clearSessionForSceneSwitch(ctx);
     await ctx.scene.enter('logoWizard');
   });
 
-  // Handle entering sticker wizard scene
-  bot.action('generate_stickers', async (ctx: BotContext) => {
-    console.log('🚨 CALLBACK HANDLER: generate_stickers button clicked!');
-    console.log('🚨 Session before cleanup:', JSON.stringify(ctx.session, null, 2));
-    
-    // Safely answer callback query - don't let timeouts break the flow
-    try {
-      await ctx.answerCbQuery();
-    } catch (error) {
-      console.log('⚠️ answerCbQuery failed (likely timeout), continuing anyway:', error instanceof Error ? error.message : String(error));
-    }
-    
-    await clearSessionForSceneSwitch(ctx);
-    console.log('🚨 Session after cleanup:', JSON.stringify(ctx.session, null, 2));
-    await ctx.scene.enter('stickerWizard');
-    console.log('🚨 CALLBACK HANDLER: Entered stickerWizard scene');
-  });
-
   // Handle entering meme wizard scene
   bot.action('generate_memes', async (ctx: BotContext) => {
-    try {
-      await ctx.answerCbQuery();
-    } catch (error) {
-      console.log('⚠️ answerCbQuery failed for meme generation:', error instanceof Error ? error.message : String(error));
-    }
+    await ctx.answerCbQuery();
+    console.log(`[User Action] generate_memes clicked by user=${ctx.from?.id}`);
     await clearSessionForSceneSwitch(ctx);
     await ctx.scene.enter('memeWizard');
+  });
+
+  // Handle entering sticker wizard scene
+  bot.action('generate_stickers', async (ctx: BotContext) => {
+    await ctx.answerCbQuery();
+    console.log(`[User Action] generate_stickers clicked by user=${ctx.from?.id}`);
+    await clearSessionForSceneSwitch(ctx);
+    await ctx.scene.enter('stickerWizard');
   });
 
   // Handle choose_N callbacks
