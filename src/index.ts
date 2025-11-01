@@ -34,6 +34,7 @@ import { StorageService } from './services/storage.service';
 
 import { LogoVariantService } from './services/logoVariant.service';
 import { CompleteAssetGenerationService } from './services/completeAssetGeneration.service';
+import { TelegramStarsService } from './services/telegramStars.service';
 import { handleImageGenerationError } from './utils/retry';
 import { createTelegramStickerPack, addStickerToPack } from './utils/telegramStickerPack';
 import { clearUserIntervals } from './utils/intervalManager';
@@ -51,10 +52,20 @@ logger.info('📦 Index file loaded - Initializing scalable bot architecture');
 
 // --- Main Menu Helper ---
 export async function sendMainMenu(ctx: BotContext) {
-  // Show star balance if available
+  // Auto-sync balance before displaying
+  let balance = 0;
+  if (ctx.dbUser && ctx.from?.id) {
+    try {
+      balance = await telegramStarsService.getUserStarsBalance(ctx.from.id);
+    } catch (error) {
+      console.error('Error syncing balance in menu:', error);
+      balance = ctx.dbUser.starBalance || 0;
+    }
+  }
+
   let balanceMsg = '';
-  if (ctx.dbUser) {
-    balanceMsg = `\n\n*${ctx.i18n.t('welcome.star_balance')}:* ${ctx.dbUser.starBalance} ⭐`;
+  if (balance > 0 || ctx.dbUser) {
+    balanceMsg = `\n\n*${ctx.i18n.t('welcome.star_balance')}:* ${balance} ⭐`;
   }
 
   // Add beta testing notice if in testing mode
@@ -110,6 +121,11 @@ if (!config.telegram.botToken) {
 }
 
 const bot = new Telegraf<BotContext>(config.telegram.botToken);
+
+// Initialize Telegram Stars Service (must be after bot creation)
+const telegramStarsService = new TelegramStarsService(bot);
+// Export service so scenes can use it
+export { telegramStarsService };
 
 // Dynamically resolve bot username for Telegram sticker set naming
 let RESOLVED_BOT_USERNAME: string = config.telegram.botUsername || '';
@@ -915,9 +931,12 @@ const startBot = async () => {
                   }
 
                   if (cost > 0) {
-                    console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
-                    user.starBalance -= cost;
-                    console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
+                    const result = await telegramStarsService.consumeUserStars(userId, cost);
+                    if (result.success) {
+                      console.log(`[ImageWorker] User ${userId} deducted ${cost} stars. New balance: ${result.balance}`);
+                    } else {
+                      console.error(`[ImageWorker] Failed to deduct ${cost} stars from user ${userId}: ${result.error}`);
+                    }
                   }
 
                   await user.save();
@@ -1033,9 +1052,12 @@ const startBot = async () => {
                     }
 
                     if (cost > 0) {
-                      console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
-                      user.starBalance -= cost;
-                      console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
+                      const result = await telegramStarsService.consumeUserStars(userId, cost);
+                      if (result.success) {
+                        console.log(`[ImageWorker] User ${userId} deducted ${cost} stars. New balance: ${result.balance}`);
+                      } else {
+                        console.error(`[ImageWorker] Failed to deduct ${cost} stars from user ${userId}: ${result.error}`);
+                      }
                     }
 
                     await user.save();
@@ -1224,9 +1246,12 @@ const startBot = async () => {
                   }
 
                   if (totalCost > 0 && process.env.TESTING !== 'true') {
-                    console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
-                    user.starBalance -= totalCost;
-                    console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
+                    const result = await telegramStarsService.consumeUserStars(userId, totalCost);
+                    if (result.success) {
+                      console.log(`[ImageWorker] User ${userId} deducted ${totalCost} stars. New balance: ${result.balance}`);
+                    } else {
+                      console.error(`[ImageWorker] Failed to deduct ${totalCost} stars from user ${userId}: ${result.error}`);
+                    }
                   } else if (process.env.TESTING === 'true') {
                     console.log(`[ImageWorker] Testing mode: Skipping balance deduction for user ${userId}. Cost would be: ${totalCost}`);
                   }
@@ -1534,113 +1559,68 @@ bot.action('back_to_menu', async (ctx) => {
   await sendMainMenu(ctx);
 });
 
-// Add the buy_stars action handler and detailed history
+// Buy Stars handler - redirects to @premiumbot
 bot.action('buy_stars', async (ctx) => {
   await ctx.answerCbQuery();
 
-  // First, force exit any active scene to avoid getting stuck
+  // Force exit any active scene
   await forceLeaveCurrentScene(ctx);
 
-  const user = ctx.dbUser;
-  if (!user) {
-    await ctx.reply('User not found.');
-    return;
-  }
+  const userId = ctx.from.id;
+  const premiumBotUsername = process.env.PREMIUM_BOT_USERNAME || 'premiumbot';
+  const deepLink = `https://t.me/${premiumBotUsername}?start=ref_${userId}`;
 
-  await ctx.reply(ctx.i18n.t('stars.choose_amount'), {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: ctx.i18n.t('stars.stars_100'), callback_data: 'buy_stars_100' },
-          { text: ctx.i18n.t('stars.stars_500'), callback_data: 'buy_stars_500' }
-        ],
-        [
-          { text: ctx.i18n.t('stars.stars_1000'), callback_data: 'buy_stars_1000' },
-          { text: ctx.i18n.t('stars.stars_2500'), callback_data: 'buy_stars_2500' }
-        ],
-        [
-          { text: ctx.i18n.t('history.back_to_menu'), callback_data: 'back_to_menu' }
+  await ctx.reply(
+    `🌟 *Purchase Telegram Stars*\n\n` +
+    `To buy stars for logo generation and other services:\n\n` +
+    `1️⃣ Click the button below to open @${premiumBotUsername}\n` +
+    `2️⃣ Purchase your stars there\n` +
+    `3️⃣ Return here - your stars will be automatically synced!\n\n` +
+    `⭐ Stars purchased from @${premiumBotUsername} work automatically in this bot.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { 
+              text: `💳 Buy Stars via @${premiumBotUsername}`, 
+              url: deepLink
+            }
+          ],
+          [
+            { text: '🔄 Refresh Balance', callback_data: 'refresh_stars_balance' },
+            { text: ctx.i18n.t('history.back_to_menu'), callback_data: 'back_to_menu' }
+          ]
         ]
-      ]
+      }
     }
-  });
+  );
 });
 
-// Add handlers for each star purchase option
-bot.action(/buy_stars_(\d+)/, async (ctx) => {
-  await ctx.answerCbQuery();
-
-  // Make sure we're not in any scene
-  await forceLeaveCurrentScene(ctx);
-
-  const starsAmount = parseInt(ctx.match[1]);
-
-  // Calculate price based on star amount
-  let price;
-  switch(starsAmount) {
-    case 100: price = 499; break;    // $4.99
-    case 500: price = 1999; break;   // $19.99
-    case 1000: price = 3499; break;  // $34.99
-    case 2500: price = 6999; break;  // $69.99
-    default: price = 499;
-  }
-
-  // Create an invoice with TON support
-  const invoice = {
-    title: `${starsAmount} Stars`,
-    description: `Purchase ${starsAmount} ⭐ stars for your Crypto AI Images`,
-    payload: `stars_${starsAmount}_${ctx.from.id}_${Date.now()}`,
-    provider_token: process.env.PROVIDER_TOKEN || '',
-    currency: 'USD',
-    prices: [{ label: `${starsAmount} Stars`, amount: price }],
-    start_parameter: `buy_stars_${starsAmount}`,
-  };
+// Refresh Stars Balance handler
+bot.action('refresh_stars_balance', async (ctx) => {
+  await ctx.answerCbQuery('🔄 Refreshing balance...');
 
   try {
-    await ctx.replyWithInvoice(invoice);
-  } catch (error) {
-    console.error('Payment error:', error);
-    await ctx.reply(ctx.i18n.t('stars.payment_unavailable'));
-  }
-});
-
-// Handle successful payments
-bot.on('pre_checkout_query', async (ctx) => {
-  // Allow all payments to go through
-  await ctx.answerPreCheckoutQuery(true);
-});
-
-bot.on('successful_payment', async (ctx) => {
-  const payload = ctx.message.successful_payment.invoice_payload;
-  const [type, amount, userId] = payload.split('_');
-
-  if (type === 'stars' && amount && userId) {
-    const starsAmount = parseInt(amount);
-
-    try {
-      // Update user's star balance
-      const user = await User.findOne({ userId: parseInt(userId) });
-      if (user) {
-        user.starBalance += starsAmount;
-        await user.save();
-        await ctx.reply(ctx.i18n.t('stars.payment_successful', { amount: starsAmount, balance: user.starBalance }));
-
-        // Force exit from any active scene to prevent being stuck in the loop
-        await forceLeaveCurrentScene(ctx);
-        // Add a helpful message about the /cancel command
-        await ctx.reply(ctx.i18n.t('general.stuck_help'));
-        // Show the main menu after successful payment
-        await sendMainMenu(ctx);
-      } else {
-        await ctx.reply(ctx.i18n.t('stars.user_not_found'));
+    const userId = ctx.from.id;
+    const balance = await telegramStarsService.refreshBalance(userId);
+    
+    await ctx.reply(
+      `⭐ *Balance Refreshed*\n\n` +
+      `Your current balance: *${balance} stars*\n\n` +
+      `_Balance synced with Telegram Stars._`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
+          ]
+        }
       }
-    } catch (error) {
-      console.error('Error updating user balance after payment:', error);
-      await ctx.reply(ctx.i18n.t('stars.error_updating'));
-      // Still try to exit any scene even if there was an error
-      await forceLeaveCurrentScene(ctx);
-      await sendMainMenu(ctx);
-    }
+    );
+  } catch (error) {
+    console.error('Error refreshing balance:', error);
+    await ctx.reply('❌ Error refreshing balance. Please try again later.');
   }
 });
 
@@ -2387,16 +2367,21 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
       }
 
       const requiredCredits = 50;
-      if (user.starBalance < requiredCredits) {
+      
+      // Auto-sync balance before checking
+      const currentBalance = await telegramStarsService.getUserStarsBalance(userIdNum);
+      
+      if (currentBalance < requiredCredits) {
         await ctx.reply(
           `❌ Insufficient balance!\n\n` +
           `Complete package costs: ${requiredCredits} ⭐\n` +
-          `Your balance: ${user.starBalance} ⭐\n\n` +
-          `Please top up your balance to download the complete package.`,
+          `Your balance: ${currentBalance} ⭐\n\n` +
+          `💡 Tip: After purchasing stars from @premiumbot, your balance will auto-sync!`,
           {
             reply_markup: {
               inline_keyboard: [
                 [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                [{ text: '🔄 Refresh Balance', callback_data: 'refresh_stars_balance' }],
                 [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
               ]
             }
@@ -2405,11 +2390,14 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         return;
       }
 
-      // Deduct credits
-      user.starBalance -= requiredCredits;
-      await user.save();
+      // Deduct credits using service
+      const result = await telegramStarsService.consumeUserStars(userIdNum, requiredCredits);
+      if (!result.success) {
+        await ctx.reply(`❌ Payment failed: ${result.error || 'Unknown error'}`);
+        return;
+      }
 
-      console.log(`[Download] Deducted ${requiredCredits} credits from user ${userIdNum}. New balance: ${user.starBalance}`);
+      console.log(`[Download] Deducted ${requiredCredits} credits from user ${userIdNum}. New balance: ${result.balance}`);
     } else {
       console.log(`[Download] Testing mode - skipping payment for user ${userIdNum}`);
     }

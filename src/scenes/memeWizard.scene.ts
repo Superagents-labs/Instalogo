@@ -7,6 +7,7 @@ import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
 import { MongoDBService } from '../services/mongodb.service';
 import { addUserInterval } from '../utils/intervalManager';
+import { telegramStarsService } from '../index';
 
 // Removed hardcoded questions - we'll use i18n translation keys instead
 export function createMemeWizardScene(openaiService: OpenAIService, mongodbService: MongoDBService): Scenes.WizardScene<BotContext> {
@@ -270,10 +271,29 @@ export function createMemeWizardScene(openaiService: OpenAIService, mongodbServi
     }
     
     const cost = !user.freeGenerationUsed ? 0 : calculateMemeCost(quality);
+    
     // Skip credit check in testing mode
-    if (process.env.TESTING !== 'true' && cost > 0 && user.starBalance < cost) {
-      await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
-      return ctx.scene.leave();
+    if (process.env.TESTING !== 'true' && cost > 0) {
+      // Auto-sync balance before checking
+      const currentBalance = await telegramStarsService.getUserStarsBalance(ctx.from!.id);
+      
+      if (currentBalance < cost) {
+        await ctx.reply(
+          ctx.i18n.t('errors.insufficient_stars') + `\n\n` +
+          `Your balance: ${currentBalance} ⭐\n` +
+          `Required: ${cost} ⭐\n\n` +
+          `💡 Tip: After purchasing stars from @premiumbot, your balance will auto-sync!`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                [{ text: '🔄 Refresh Balance', callback_data: 'refresh_stars_balance' }]
+              ]
+            }
+          }
+        );
+        return ctx.scene.leave();
+      }
     }
     await ctx.reply(ctx.i18n.t('memes.generating'));
     

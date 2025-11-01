@@ -10,6 +10,7 @@ import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
 import { addUserInterval } from '../utils/intervalManager';
+import { telegramStarsService } from '../index';
 
 function getStickerPackName(ctx: BotContext) {
   const username = ctx.from?.username || `user${ctx.from?.id}`;
@@ -249,9 +250,27 @@ export function createStickerWizardScene(openaiService: OpenAIService, fluxServi
       }
       
       // Skip credit check in testing mode
-      if (process.env.TESTING !== 'true' && totalCost > 0 && user.starBalance < totalCost) {
-        await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
-        return ctx.scene.leave();
+      if (process.env.TESTING !== 'true' && totalCost > 0) {
+        // Auto-sync balance before checking
+        const currentBalance = await telegramStarsService.getUserStarsBalance(ctx.from!.id);
+        
+        if (currentBalance < totalCost) {
+          await ctx.reply(
+            ctx.i18n.t('errors.insufficient_stars') + `\n\n` +
+            `Your balance: ${currentBalance} ⭐\n` +
+            `Required: ${totalCost} ⭐\n\n` +
+            `💡 Tip: After purchasing stars from @premiumbot, your balance will auto-sync!`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                  [{ text: '🔄 Refresh Balance', callback_data: 'refresh_stars_balance' }]
+                ]
+              }
+            }
+          );
+          return ctx.scene.leave();
+        }
       }
       
       // Ask for confirmation
@@ -321,9 +340,27 @@ export function createStickerWizardScene(openaiService: OpenAIService, fluxServi
     }
     
     // Check if user has enough stars again (skip in testing mode)
-    if (process.env.TESTING !== 'true' && totalCost > 0 && user.starBalance < totalCost) {
-      await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
-      return ctx.scene.leave();
+    if (process.env.TESTING !== 'true' && totalCost > 0) {
+      // Auto-sync balance before checking
+      const currentBalance = await telegramStarsService.getUserStarsBalance(ctx.from!.id);
+      
+      if (currentBalance < totalCost) {
+        await ctx.reply(
+          ctx.i18n.t('errors.insufficient_stars') + `\n\n` +
+          `Your balance: ${currentBalance} ⭐\n` +
+          `Required: ${totalCost} ⭐\n\n` +
+          `💡 Tip: After purchasing stars from @premiumbot, your balance will auto-sync!`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                [{ text: '🔄 Refresh Balance', callback_data: 'refresh_stars_balance' }]
+              ]
+            }
+          }
+        );
+        return ctx.scene.leave();
+      }
     }
     
     await ctx.reply(ctx.i18n.t('stickers.generating'));
