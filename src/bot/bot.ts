@@ -12,7 +12,7 @@ import { userLoader } from '../middleware/userLoader';
 import i18n, { i18nMiddleware } from '../middleware/i18n.middleware';
 import { sceneSessionResetMiddleware, ensureSessionCleanup } from '../middleware/scene.middleware';
 import { setupLanguageCommand } from '../commands/language';
-import { startImageWorker } from '../utils/imageQueue';
+// Image worker is handled in main index.ts, not here
 import { config } from '../config/config';
 import logger from '../utils/logger';
 import { setupGracefulShutdown } from '../utils/gracefulShutdown';
@@ -120,9 +120,8 @@ export async function startBot(): Promise<void> {
   logger.info('🚀 Starting bot with polling...');
 
   try {
-    // Start image worker if needed
-    logger.info('🔄 Starting image generation worker...');
-    startImageWorker();
+    // Note: Image worker is started in main index.ts with the full job processor
+    // This is just the bot initialization - worker setup is handled separately
 
     // Start bot polling
     await bot.launch({
