@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/Users/somkyd/Superagents Labs/Instalogo Project/Instalogo/logs/.26b0ada50a6f02ef6f7ed2e21d157385e28a04b7-audit.json",
+    "files": [
+        {
+            "date": 1762004983318,
+            "name": "/Users/somkyd/Superagents Labs/Instalogo Project/Instalogo/logs/bot-2025-11-01.log",
+            "hash": "728d819631f4779bedc256e4ca495002cae73cfe99ff1fad9a49f6f17c8a6be7"
+        }
+    ],
+    "hashType": "sha256"
+}

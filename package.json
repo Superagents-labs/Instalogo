@@ -32,8 +32,11 @@
     "aws-sdk": "^2.1692.0",
     "axios": "^1.9.0",
     "cloudinary": "^1.41.3",
+    "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^5.1.0",
+    "express-rate-limit": "^6.7.0",
+    "helmet": "^6.1.5",
     "image-size": "^2.0.2",
     "ioredis": "^5.6.1",
     "jszip": "^3.10.1",
@@ -43,12 +46,15 @@
     "replicate": "^1.2.0",
     "sharp": "0.32.6",
     "telegraf": "^4.16.3",
-    "telegraf-i18n": "^6.6.0"
+    "telegraf-i18n": "^6.6.0",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "@types/agenda": "^3.0.2",
     "@types/axios": "^0.9.36",
     "@types/dotenv": "^6.1.1",
+    "@types/cors": "^2.8.13",
     "@types/express": "^5.0.3",
     "@types/image-size": "^0.7.0",
     "@types/ioredis": "^4.28.10",
