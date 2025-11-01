@@ -1,12 +1,25 @@
 import dotenv from 'dotenv';
 import path from 'path';
-import { connectDB } from './db/mongoose';
+import { connectDB, checkDBHealth } from './utils/dbConnect';
 import axios from 'axios';
 import { User } from './models/User';
 import express from 'express';
+import logger from './utils/logger';
+import { config } from './config/config';
+import { setupGracefulShutdown } from './utils/gracefulShutdown';
 
 // Load environment variables first
 dotenv.config();
+
+// Disable noisy console logs in production (keep errors)
+if (process.env.NODE_ENV === 'production') {
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  console.log = () => {};
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  console.info = () => {};
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  console.debug = () => {};
+}
 
 import { Telegraf, session, Markup, Scenes } from 'telegraf';
 import { BotContext } from './types';
@@ -33,7 +46,7 @@ import sharp from 'sharp';
 
 const { ImageGeneration } = require('./models/ImageGeneration');
 
-console.log('Index file loaded');
+logger.info('📦 Index file loaded - Initializing scalable bot architecture');
 
 // --- Main Menu Helper ---
 export async function sendMainMenu(ctx: BotContext) {
@@ -42,13 +55,13 @@ export async function sendMainMenu(ctx: BotContext) {
   if (ctx.dbUser) {
     balanceMsg = `\n\n*${ctx.i18n.t('welcome.star_balance')}:* ${ctx.dbUser.starBalance} ⭐`;
   }
-  
+
   // Add beta testing notice if in testing mode
   let betaNotice = '';
   if (process.env.TESTING === 'true') {
     betaNotice = `\n\n🧪 *BETA TESTING MODE*\n🎉 *All features are FREE during testing!*\n📝 Help us improve by sharing feedback\n\n`;
   }
-  
+
   await ctx.reply(
     `*${ctx.i18n.t('welcome.title')}*${betaNotice}\n${ctx.i18n.t('welcome.what_to_do')}${balanceMsg}\n\n_${ctx.i18n.t('welcome.built_by')}_`,
     {
@@ -89,22 +102,27 @@ const storageService = new StorageService();
 const logoVariantService = new LogoVariantService(storageService, openaiService);
 const completeAssetGenerationService = new CompleteAssetGenerationService(storageService, openaiService);
 
-// Initialize the bot
-const bot = new Telegraf<BotContext>(process.env.BOT_TOKEN || '');
+// Initialize the bot with proper configuration
+if (!config.telegram.botToken) {
+  logger.error('❌ BOT_TOKEN is required but not found in environment variables');
+  process.exit(1);
+}
+
+const bot = new Telegraf<BotContext>(config.telegram.botToken);
 
 // Dynamically resolve bot username for Telegram sticker set naming
-let RESOLVED_BOT_USERNAME: string = process.env.BOT_USERNAME || '';
+let RESOLVED_BOT_USERNAME: string = config.telegram.botUsername || '';
 (async () => {
   try {
     const me = await bot.telegram.getMe();
     if (me?.username) {
       RESOLVED_BOT_USERNAME = me.username;
-      console.log(`[Bot] Resolved bot username: @${RESOLVED_BOT_USERNAME}`);
+      logger.info(`✅ Resolved bot username: @${RESOLVED_BOT_USERNAME}`);
     } else {
-      console.warn('[Bot] Could not resolve bot username via getMe(); falling back to env BOT_USERNAME');
+      logger.warn('⚠️  Could not resolve bot username via getMe(); falling back to env BOT_USERNAME');
     }
   } catch (e) {
-    console.warn('[Bot] getMe() failed; using env BOT_USERNAME if set');
+    logger.warn('⚠️  getMe() failed; using env BOT_USERNAME if set');
   }
 })();
 
@@ -172,7 +190,7 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
   if (ctx.scene && ctx.scene.current) {
     // Preserve language setting if available
     const language = ctx.i18n?.locale();
-    
+
     try {
       await ctx.scene.leave();
       console.log('Successfully left scene');
@@ -180,17 +198,17 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
       console.error('Error leaving scene:', err);
       // If we can't leave gracefully, we'll still reset the session below
     }
-    
+
     // Completely reset session
-    ctx.session = { 
+    ctx.session = {
       __scenes: { current: null, state: {} }
     } as any;
-    
+
     // Restore language setting
     if (language && ctx.i18n) {
       ctx.i18n.locale(language);
     }
-    
+
     console.log('Scene left and session fully reset');
   } else if (!ctx.session) {
     // If no session at all, create one
@@ -198,7 +216,7 @@ async function forceLeaveCurrentScene(ctx: BotContext) {
   } else {
     // Even if not in a scene, clear everything except core structure
     ctx.session = { __scenes: { current: null, state: {} } } as any;
-    
+
     // Restore language if it was set
     if (ctx.i18n) {
       const lang = ctx.i18n.locale();
@@ -216,15 +234,15 @@ bot.start(async (ctx) => {
   const userId = ctx.from?.id || 0;
   const now = Date.now();
   const lastTime = lastStartCommand.get(userId) || 0;
-  
+
   if (now - lastTime < 2000) {
-    console.log('Ignoring duplicate /start command');
+    logger.debug('Ignoring duplicate /start command');
     return;
   }
-  
+
   // Update the timestamp
   lastStartCommand.set(userId, now);
-  
+
   // Process referral if present in start payload
   const startPayload = ctx.startPayload;
   if (startPayload && startPayload.startsWith('REF')) {
@@ -236,10 +254,10 @@ bot.start(async (ctx) => {
         );
       }
     } catch (error) {
-      console.error('Error processing referral:', error);
+      logger.error('Error processing referral:', error);
     }
   }
-  
+
   // Add special beta testing welcome if in testing mode
   if (process.env.TESTING === 'true') {
     await ctx.reply(
@@ -252,10 +270,10 @@ bot.start(async (ctx) => {
       { parse_mode: 'Markdown' }
     );
   }
-  
+
   // Force leave and clear any existing scene state
   await forceLeaveCurrentScene(ctx);
-  
+
   // Extra step: Completely reset ALL session data to ensure nothing persists
   if (ctx.session) {
     const scenes = ctx.session.__scenes;
@@ -269,7 +287,7 @@ bot.start(async (ctx) => {
       }
     }
   }
-  
+
   await sendMainMenu(ctx);
 });
 
@@ -300,7 +318,7 @@ bot.command('referral', async (ctx) => {
 
   try {
     let stats = await mongodbService.getReferralStats(userId);
-    
+
     // Generate referral code if user doesn't have one
     if (!stats.referralCode) {
       const newCode = await mongodbService.generateReferralCode(userId);
@@ -311,7 +329,7 @@ bot.command('referral', async (ctx) => {
 
     if (stats.referralCode) {
       const referralLink = `https://t.me/${ctx.botInfo.username}?start=${stats.referralCode}`;
-      
+
       await ctx.reply(
         `🔗 *Your Referral Program*\n\n` +
         `📋 *Your Referral Link:*\n\`${referralLink}\`\n\n` +
@@ -322,7 +340,7 @@ bot.command('referral', async (ctx) => {
         `• You get: 20 ⭐ when they use the bot\n` +
         `• They get: No bonus (fair pricing for all)\n\n` +
         `Share your link and earn stars! 🚀`,
-        { 
+        {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
@@ -367,30 +385,30 @@ bot.hears('Generate Memes', async (ctx) => {
 bot.action('generate_memes', async (ctx) => {
   await ctx.answerCbQuery();
   await forceLeaveCurrentScene(ctx);
-  
+
   // Completely reset ALL meme-related session data
   const memeKeys = [
-    'memeImageFileId', 'memeImageSkipped', 'memeTopic', 
-    'memeAudience', 'memeMood', 'memeElements', 
-    'memeCatch', 'memeFormat', 'memeColor', 'memeStyle', 
+    'memeImageFileId', 'memeImageSkipped', 'memeTopic',
+    'memeAudience', 'memeMood', 'memeElements',
+    'memeCatch', 'memeFormat', 'memeColor', 'memeStyle',
     'memeStyleDesc', 'memeText', 'awaitingCustomMemeStyle'
   ];
-  
+
   // Remove all meme keys and ensure no old data persists
   if (ctx.session) {
     // Save important system properties
     const scenes = ctx.session.__scenes;
     const language = ctx.i18n?.locale();
-    
+
     // Reset to a clean session
     ctx.session = { __scenes: scenes } as any;
-    
+
     // Restore language
     if (language && ctx.i18n) {
       ctx.i18n.locale(language);
     }
   }
-  
+
   // Show the Start Meme Flow button
   await ctx.reply('Ready to start meme creation?', {
     reply_markup: {
@@ -502,37 +520,37 @@ function calculateMemeCost(quality: string): number {
  */
 function buildIconSpecificPrompts(iconIdeas: string, brandName: string, style: string): { concept1: string; concept2: string } {
   const iconArray = iconIdeas.toLowerCase().split(', ');
-  
+
   // Categorize icons for targeted prompts
-  const techIcons = iconArray.filter(icon => 
-    icon.includes('circuit') || icon.includes('tech') || icon.includes('node') || 
-    icon.includes('shield') || icon.includes('cloud') || icon.includes('gear') || 
+  const techIcons = iconArray.filter(icon =>
+    icon.includes('circuit') || icon.includes('tech') || icon.includes('node') ||
+    icon.includes('shield') || icon.includes('cloud') || icon.includes('gear') ||
     icon.includes('cog') || icon.includes('network') || icon.includes('connectivity')
   );
-  
-  const natureIcons = iconArray.filter(icon => 
-    icon.includes('leaf') || icon.includes('plant') || icon.includes('water') || 
-    icon.includes('droplet') || icon.includes('mountain') || icon.includes('landscape') || 
+
+  const natureIcons = iconArray.filter(icon =>
+    icon.includes('leaf') || icon.includes('plant') || icon.includes('water') ||
+    icon.includes('droplet') || icon.includes('mountain') || icon.includes('landscape') ||
     icon.includes('animal') || icon.includes('sun') || icon.includes('energy')
   );
-  
-  const businessIcons = iconArray.filter(icon => 
-    icon.includes('graph') || icon.includes('chart') || icon.includes('building') || 
-    icon.includes('structure') || icon.includes('handshake') || icon.includes('partnership') || 
-    icon.includes('crown') || icon.includes('award') || icon.includes('arrow') || 
+
+  const businessIcons = iconArray.filter(icon =>
+    icon.includes('graph') || icon.includes('chart') || icon.includes('building') ||
+    icon.includes('structure') || icon.includes('handshake') || icon.includes('partnership') ||
+    icon.includes('crown') || icon.includes('award') || icon.includes('arrow') ||
     icon.includes('direction')
   );
-  
-  const abstractIcons = iconArray.filter(icon => 
-    icon.includes('abstract') || icon.includes('geometric') || icon.includes('pattern') || 
-    icon.includes('monogram') || icon.includes('minimalist') || icon.includes('symbol') || 
+
+  const abstractIcons = iconArray.filter(icon =>
+    icon.includes('abstract') || icon.includes('geometric') || icon.includes('pattern') ||
+    icon.includes('monogram') || icon.includes('minimalist') || icon.includes('symbol') ||
     icon.includes('shape')
   );
-  
+
   // Build concept-specific prompts
   let concept1 = '';
   let concept2 = '';
-  
+
   if (techIcons.length > 0) {
     concept1 = `featuring a prominent TECH ICON with ${techIcons.join(' and ')}, modern sleek design, clean geometric lines, innovation-focused`;
     concept2 = `with a distinctive TECH SYMBOL incorporating ${techIcons.join(' and ')}, cutting-edge aesthetic, precision engineering visual`;
@@ -550,17 +568,17 @@ function buildIconSpecificPrompts(iconIdeas: string, brandName: string, style: s
     concept1 = `featuring a prominent ICON with ${iconIdeas.toLowerCase()}, distinctive design, strong visual impact`;
     concept2 = `with a distinctive SYMBOL incorporating ${iconIdeas.toLowerCase()}, unique visual elements, memorable design`;
   }
-  
+
   // Add icon prominence requirements
   concept1 += ', icon must be DOMINANT VISUAL ELEMENT, bold and immediately recognizable';
   concept2 += ', symbol must be PROMINENT FEATURE, scalable and impactful';
-  
+
   return { concept1, concept2 };
 }
 
 // Start the bot
 const startBot = async () => {
-  console.log('startBot function is running...');
+  logger.info('🤖 Starting bot initialization...');
   try {
     // Check if LocalStack is running by ensuring the S3 bucket exists
     try {
@@ -571,7 +589,7 @@ const startBot = async () => {
       console.warn('LocalStack may not be available:', errorMessage);
       console.warn('Continuing anyway, but S3 storage operations may fail');
     }
-    
+
     // Start the image generation worker
     console.log('Starting BullMQ image generation worker...');
     try {
@@ -586,27 +604,27 @@ const startBot = async () => {
           if (name === 'generate-logo') {
             // Create consistent timestamp for this generation
             const generationTimestamp = Date.now();
-            
+
             // Get parameters from job data
             const freeGenerationUsed = job.data.freeGenerationUsed || false;
             const cost = job.data.cost !== undefined ? job.data.cost : (!freeGenerationUsed ? 0 : 50);
             const useDSPy = false; // DSPy disabled - always use basic prompts
-            
+
             console.log(`[ImageWorker] Processing logo generation. Cost: ${cost}, Free used: ${freeGenerationUsed}, DSPy: ${useDSPy}`);
-            
+
             const sharp = require('sharp');
             const allSizes = [1024, 512, 256];
-            
+
             // Get user balance for logging
             const user = await User.findOne({ userId });
             const userBalance = user?.starBalance || 0;
-            
+
             let finalPrompts: string[] = [];
             let dspyResults: any[] = [];
-            
+
             // Always use comprehensive prompt generation with ALL user selections
             console.log(`[ImageWorker] 📝 Using comprehensive prompt generation with OpenAI gpt-image-1...`);
-            
+
             // Extract and format all user selections
             const brandName = session.name || 'your brand';
             const tagline = session.tagline && session.tagline !== 'skip' ? `Tagline: "${session.tagline}".` : '';
@@ -619,13 +637,13 @@ const startBot = async () => {
             const iconIdeas = Array.isArray(session.iconIdea) ? session.iconIdea.join(', ') : session.iconIdea || 'Abstract symbol';
             const inspiration = session.inspiration && session.inspiration !== 'skip' ? `Inspired by: ${session.inspiration}.` : '';
             const notes = session.finalNotes && session.finalNotes !== 'skip' ? `Special requirements: ${session.finalNotes}.` : '';
-            
+
             // Log comprehensive session data for debugging
             console.log(`[ImageWorker] Session data: Brand=${brandName}, Industry=${industry}, Vibe=${vibe}, Audience=${audience}, Style=${style}, Colors=${colors}, Typography=${typography}, Icons=${iconIdeas}`);
-            
+
             // Enhanced icon-specific prompts for more distinct icon generation
             const iconSpecificPrompts = buildIconSpecificPrompts(iconIdeas, brandName, style);
-            
+
             // Build comprehensive brand context for each concept
             const brandContext = [
               `=== BRAND IDENTITY ===`,
@@ -665,7 +683,7 @@ const startBot = async () => {
               `7. Create a timeless design that will remain relevant and effective over time`,
               ''
             ].join('\n');
-            
+
             finalPrompts = [
               // Concept 1: Enhanced icon prominence with comprehensive context
               [
@@ -677,7 +695,7 @@ const startBot = async () => {
                 `=== FINAL INSTRUCTION ===`,
                 `Generate a professional logo for ${brandName} that incorporates ALL the above context, preferences, and requirements. Focus on creating a distinctive icon that represents the brand effectively.`
               ].join('\n'),
-               
+
               // Concept 2: Alternative with enhanced icon focus and comprehensive context
               [
                 brandContext,
@@ -690,16 +708,16 @@ const startBot = async () => {
                 `Generate a distinctive logo for ${brandName} that incorporates ALL the above context, preferences, and requirements. Create an alternative design approach that showcases different visual possibilities.`
               ].join('\n')
             ];
-            
+
             if (!session.generatedLogos) session.generatedLogos = [];
-            
+
             // Generate each logo separately with its own prompt and seed
             const generatedLogos: Array<{url: string, seed: number, prompt: string}> = [];
-            
+
             for (let idx = 0; idx < finalPrompts.length; idx++) {
               const logoPrompt = finalPrompts[idx];
               console.log(`[ImageWorker] Generating logo ${idx + 1} with prompt: ${logoPrompt.substring(0, 100)}...`);
-              
+
               try {
                 // Use OpenAI service for logo generation with retry logic
                 const openaiResult = await openaiService.generateLogoImages({
@@ -708,22 +726,22 @@ const startBot = async () => {
                   sessionId: session?.sessionId,
                   freeGeneration: idx === 0 && !freeGenerationUsed
                 });
-                
+
                 console.log(`[ImageWorker] Generated logo ${idx + 1} with OpenAI`);
-                
+
                 // Check if image data exists and is valid
                 if (!openaiResult || openaiResult.length === 0) {
                   console.error(`[ImageWorker] No image data returned for logo ${idx + 1}`);
                   continue; // Skip this logo and continue with the next one
                 }
-              
+
               // Get the first image URL from OpenAI result
               const imageUrl = openaiResult[0];
               if (!imageUrl || typeof imageUrl !== 'string') {
                 console.error(`[ImageWorker] Invalid image URL for logo ${idx + 1}:`, typeof imageUrl);
                 continue; // Skip this logo
               }
-              
+
               // Handle both base64 data URLs and direct URLs
               let imageBuffer: Buffer;
               if (imageUrl.startsWith('data:')) {
@@ -741,13 +759,13 @@ const startBot = async () => {
                 }
               }
               const logoSet: Record<string, string> = {};
-              
+
               // Create multiple sizes for each logo (OpenAI gpt-image-1 generates transparent PNGs natively)
               for (const size of allSizes) {
                 // Simply resize the image - OpenAI gpt-image-1 already generates transparent PNGs
                 const resized = await sharp(imageBuffer)
                   .resize(size, size)
-                  .png({ 
+                  .png({
                     quality: 100,
                     compressionLevel: 0,
                     adaptiveFiltering: false,
@@ -760,32 +778,32 @@ const startBot = async () => {
                 });
                 logoSet[size] = storedUrl;
               }
-              
+
               // Store the main logo URL (no seed for OpenAI gpt-image-1)
               generatedLogos.push({
                 url: logoSet['1024'],
                 seed: undefined, // OpenAI gpt-image-1 doesn't support seeds
                 prompt: logoPrompt
               });
-              
+
               session.generatedLogos.push(logoSet);
-              
+
               // Send logo with basic concept description
               const conceptDescription = `Logo Concept ${idx + 1}`;
               const caption = `${conceptDescription}\n\n${cost === 0 ? '(Free)' : `(${cost} stars)`}`;
-              
+
               // Process image for preview (OpenAI gpt-image-1 generates transparent PNGs natively)
               const previewBuffer = await sharp(imageBuffer)
-                .png({ 
+                .png({
                   quality: 100,
                   compressionLevel: 0,
                   adaptiveFiltering: false,
                   force: true
                 })
                 .toBuffer();
-              
+
               // Send preview as photo
-              await bot.telegram.sendPhoto(chatId, { source: previewBuffer }, { 
+              await bot.telegram.sendPhoto(chatId, { source: previewBuffer }, {
                 caption: `📸 Preview: ${caption}`,
                 reply_markup: {
                   inline_keyboard: [
@@ -800,12 +818,12 @@ const startBot = async () => {
                   ]
                 }
               });
-              
+
               // Send processed PNG as document for download
-              await bot.telegram.sendDocument(chatId, { 
-                source: previewBuffer, 
-                filename: `${session?.name?.replace(/\s+/g, '-').toLowerCase() || 'logo'}-concept-${idx + 1}.png` 
-              }, { 
+              await bot.telegram.sendDocument(chatId, {
+                source: previewBuffer,
+                filename: `${session?.name?.replace(/\s+/g, '-').toLowerCase() || 'logo'}-concept-${idx + 1}.png`
+              }, {
                 caption: `📥 Download: ${conceptDescription} (PNG Format)\n\nHigh-quality PNG with transparent background - perfect for professional use!`,
                 reply_markup: {
                   inline_keyboard: [
@@ -815,33 +833,33 @@ const startBot = async () => {
                   ]
                 }
               });
-              
+
               } catch (logoError) {
                 console.error(`[ImageWorker] Error generating logo ${idx + 1}:`, logoError);
-                
+
                 // Send user-friendly error message
                 const errorMessage = handleImageGenerationError(logoError, `Logo ${idx + 1} generation`);
-                await bot.telegram.sendMessage(chatId, 
+                await bot.telegram.sendMessage(chatId,
                   `❌ ${errorMessage}\n\nContinuing with other logos...`
                 );
-                
+
                 // Continue with next logo instead of failing completely
                 continue;
               }
             }
-            
+
             // Check if we have any successful logos
             if (generatedLogos.length === 0) {
               console.error(`[ImageWorker] No logos were generated successfully for user ${userId}`);
-              await bot.telegram.sendMessage(chatId, 
+              await bot.telegram.sendMessage(chatId,
                 '❌ Sorry, all logo generation attempts failed. This might be due to network issues or service problems. Please try again later.'
               );
-              
+
               // Clear intervals and exit
               clearUserIntervals(userId);
               return;
             }
-            
+
             // Store generation data with seeds for variant generation
             const generationData = {
               userId,
@@ -852,10 +870,10 @@ const startBot = async () => {
               seeds: generatedLogos.map(logo => logo.seed), // Store all seeds
               prompts: generatedLogos.map(logo => logo.prompt) // Store all prompts
             };
-            
+
             // Store in session for variant generation
             (session as any).generationData = generationData;
-            
+
             // Store in database with seed information and API cost
             try {
             const createdLogoGen = await ImageGeneration.create({
@@ -884,7 +902,7 @@ const startBot = async () => {
             } catch (dbErr) {
               console.error('[DB] Failed to save logo ImageGeneration:', dbErr);
             }
-            
+
             // Update the user's status if needed
             if (job.data.updateUser) {
               try {
@@ -894,15 +912,15 @@ const startBot = async () => {
                     user.freeGenerationUsed = true;
                     console.log(`[ImageWorker] Marked free generation as used for user ${userId}`);
                   }
-                  
+
                   if (cost > 0) {
                     console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
                     user.starBalance -= cost;
                     console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
                   }
-                  
+
                   await user.save();
-                  
+
                   // Check for referral conversion (first generation)
                   try {
                     const conversionResult = await mongodbService.processReferralConversion(userId);
@@ -921,28 +939,28 @@ const startBot = async () => {
                 console.error(`[ImageWorker] Error updating user after logo generation:`, dbError);
               }
             }
-            
+
             // Check if we have any successful logos
             if (generatedLogos.length === 0) {
               console.error(`[ImageWorker] No logos were generated successfully for user ${userId}`);
-              await bot.telegram.sendMessage(chatId, 
+              await bot.telegram.sendMessage(chatId,
                 '❌ Sorry, all logo generation attempts failed. This might be due to network issues or service problems. Please try again later.'
               );
-              
+
               // Clear intervals and exit
               clearUserIntervals(userId);
               return;
             }
-            
+
             // Store all logo sets in MongoDB for this user
             await mongodbService.setUserLogos(userId, session.generatedLogos);
-            
+
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-logo) - ${generatedLogos.length} logos generated`);
-            
+
             // Logos are already sent immediately during generation above
             // No need to send them again here - this was causing duplicate/wrong images
             console.log(`[ImageWorker] Logo generation completed for user ${userId} - logos already sent during generation`);
-            
+
             // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
             clearUserIntervals(userId);
           } else if (name === 'generate-meme') {
@@ -950,17 +968,17 @@ const startBot = async () => {
             const freeGenerationUsed = job.data.freeGenerationUsed || false;
             const quality = job.data.quality || 'Good';
             const cost = job.data.cost !== undefined ? job.data.cost : (!freeGenerationUsed ? 0 : calculateMemeCost(quality));
-            
+
             console.log(`[ImageWorker] Processing meme generation. Quality: ${quality}, Cost: ${cost}, Free used: ${freeGenerationUsed}, Basic prompts enabled`);
-            
+
             try {
               let buffer;
               let finalPrompt: string;
-              
+
               // Get user balance for logging
               const user = await User.findOne({ userId });
               const userBalance = user?.starBalance || 0;
-              
+
               // Build prompt from wizard and use FLUX for generation
               finalPrompt = prompt;
               console.log(`[ImageWorker] 🎛 Using FLUX for meme generation...`);
@@ -977,13 +995,13 @@ const startBot = async () => {
               // Download first meme URL to buffer
               const memeResp = await axios.get(memeUrls[0], { responseType: 'arraybuffer' });
               buffer = Buffer.from(memeResp.data as ArrayBuffer);
-              
+
               const memeUrl = await storageService.uploadBuffer(buffer, {
                 key: `memes/meme-${userId}-${Date.now()}.png`,
                 contentType: 'image/png'
               });
 
-              
+
               // Create DB record for the meme with API cost logging
               let imageGen: any;
               try {
@@ -1002,7 +1020,7 @@ const startBot = async () => {
               } catch (dbErr) {
                 console.error('[DB] Failed to save meme ImageGeneration:', dbErr);
               }
-              
+
               // Update the user's status if needed
               if (job.data.updateUser) {
                 try {
@@ -1012,15 +1030,15 @@ const startBot = async () => {
                       user.freeGenerationUsed = true;
                       console.log(`[ImageWorker] Marked free generation as used for user ${userId}`);
                     }
-                    
+
                     if (cost > 0) {
                       console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
                       user.starBalance -= cost;
                       console.log(`[ImageWorker] User ${userId} new balance: ${user.starBalance}`);
                     }
-                    
+
                     await user.save();
-                    
+
                     // Check for referral conversion (first generation)
                     try {
                       const conversionResult = await mongodbService.processReferralConversion(userId);
@@ -1039,16 +1057,16 @@ const startBot = async () => {
                   console.error(`[ImageWorker] Error updating user after meme generation:`, dbError);
                 }
               }
-              
-              // Basic caption 
+
+              // Basic caption
               const conceptDescription = 'Your meme';
               const caption = `${conceptDescription}\n\n${cost === 0 ? '(Free)' : `(${cost} stars)`}`;
-              
+
               console.log(`[ImageWorker] 📤 Sending meme to user ${userId} in chat ${chatId}...`);
               console.log(`[ImageWorker] 📝 Meme caption: ${caption}`);
               console.log(`[ImageWorker] 🖼️ Buffer size: ${buffer?.length || 'undefined'} bytes`);
-              
-              await bot.telegram.sendPhoto(chatId, { source: buffer }, { 
+
+              await bot.telegram.sendPhoto(chatId, { source: buffer }, {
                 caption,
                 reply_markup: {
                   inline_keyboard: [
@@ -1063,15 +1081,15 @@ const startBot = async () => {
                   ]
                 }
               });
-              
+
               console.log(`[ImageWorker] ✅ Meme sent successfully to user ${userId}!`);
-              
+
               // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
               clearUserIntervals(userId);
             } catch (error) {
               console.error(`[ImageWorker] Error in meme generation:`, error);
               await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your meme. Please try again.');
-              
+
               // 🧹 CLEAR INTERVALS EVEN ON ERROR
               clearUserIntervals(userId);
             }
@@ -1081,7 +1099,7 @@ const startBot = async () => {
             const stickerCount = count || 1;
             const costPerSticker = 50; // 50 stars per sticker
             let totalCost = 0;
-            
+
             // Apply free generation if available
             if (!freeGenerationUsed && stickerCount > 0) {
               totalCost = (stickerCount - 1) * costPerSticker; // First one free
@@ -1090,20 +1108,20 @@ const startBot = async () => {
               totalCost = stickerCount * costPerSticker;
               console.log(`[ImageWorker] Regular generation. Cost for ${stickerCount} stickers: ${totalCost}`);
             }
-            
+
             // Log the balance deduction for accounting
             console.log(`[ImageWorker] User ${userId} generating ${count} stickers. Cost: ${totalCost} stars.`);
-            
+
             // Get user balance for logging
             const user = await User.findOne({ userId });
             const userBalance = user?.starBalance || 0;
-            
+
             const stickerDir = path.join(__dirname, '../stickers');
             if (!fs.existsSync(stickerDir)) fs.mkdirSync(stickerDir, { recursive: true });
-            
+
             try {
               console.log(`[ImageWorker] Generating ${count} stickers with FLUX via Replicate...`);
-              
+
               // Generate all stickers in batches using FLUX
               const stickerUrls = await fluxService.generateStickers({
                 prompt: prompt,
@@ -1112,32 +1130,32 @@ const startBot = async () => {
                 sessionId: session?.sessionId,
                 generationType: 'sticker'
               });
-              
+
               // Validate sticker URLs
               if (!stickerUrls || stickerUrls.length === 0) {
                 throw new Error('No stickers returned from FLUX');
               }
-              
+
               console.log(`[ImageWorker] FLUX generated ${stickerUrls.length} stickers`);
-              
+
               // Process each generated sticker
               for (let i = 0; i < stickerUrls.length; i++) {
                 try {
                   // Download sticker from Replicate URL
                   const response = await axios.get(stickerUrls[i], { responseType: 'arraybuffer' });
                   const buffer = Buffer.from(response.data as ArrayBuffer);
-                  
+
                   const localStickerPath = path.join(stickerDir, `sticker-${userId}-${Date.now()}-${i}.png`);
                   fs.writeFileSync(localStickerPath, buffer);
-                  
+
                   const stickerUrl = await storageService.uploadBuffer(buffer, {
                     key: `stickers/sticker-${userId}-${Date.now()}-${i}.png`,
                     contentType: 'image/png'
                   });
-                  
+
                   // Calculate cost per sticker
                   const stickerCost = i === 0 && !freeGenerationUsed ? 0 : costPerSticker;
-                  
+
                   // Create DB record for this sticker with API cost logging
                   let imageGen: any;
                   try {
@@ -1156,7 +1174,7 @@ const startBot = async () => {
                   } catch (dbErr) {
                     console.error('[DB] Failed to save sticker ImageGeneration:', dbErr);
                   }
-                  
+
                   // Send sticker to user
                   await bot.telegram.sendPhoto(chatId, { source: buffer }, {
                     caption: i === 0 ? `Here is your generated sticker! ${stickerCost === 0 ? '(Free)' : `(${stickerCost} stars)`}` : `Sticker #${i+1} (${stickerCost} stars)`,
@@ -1168,16 +1186,16 @@ const startBot = async () => {
                       ]
                     }
                   });
-                  
+
                 } catch (stickerError) {
                   console.error(`[ImageWorker] Error processing sticker ${i + 1}:`, stickerError);
                   await bot.telegram.sendMessage(chatId, `Sorry, there was an error processing sticker ${i + 1}. Continuing with others...`);
                 }
               }
-              
+
               // Prompt user to finish selection and create sticker pack
               try {
-                await bot.telegram.sendMessage(chatId, 
+                await bot.telegram.sendMessage(chatId,
                   'Tap "Select for Pack" on any stickers you want to include, then press Finish:',
                   {
                     reply_markup: {
@@ -1188,12 +1206,12 @@ const startBot = async () => {
               } catch (postMsgErr) {
                 console.error('Error sending finish selection prompt:', postMsgErr);
               }
-              
+
             } catch (error) {
               console.error(`[ImageWorker] Error generating stickers with FLUX:`, error);
               await bot.telegram.sendMessage(chatId, 'Sorry, there was an error generating your stickers. Please try again later.');
             }
-            
+
             // Update user balance and free generation status
             if (job.data.updateUser) {
               try {
@@ -1203,7 +1221,7 @@ const startBot = async () => {
                     user.freeGenerationUsed = true;
                     console.log(`[ImageWorker] Marked free generation as used for user ${userId}`);
                   }
-                  
+
                   if (totalCost > 0 && process.env.TESTING !== 'true') {
                     console.log(`[ImageWorker] User ${userId} previous balance: ${user.starBalance}`);
                     user.starBalance -= totalCost;
@@ -1211,9 +1229,9 @@ const startBot = async () => {
                   } else if (process.env.TESTING === 'true') {
                     console.log(`[ImageWorker] Testing mode: Skipping balance deduction for user ${userId}. Cost would be: ${totalCost}`);
                   }
-                  
+
                   await user.save();
-                  
+
                   // Check for referral conversion (first generation)
                   try {
                     const conversionResult = await mongodbService.processReferralConversion(userId);
@@ -1232,22 +1250,22 @@ const startBot = async () => {
                 console.error(`[ImageWorker] Error updating user after sticker generation:`, dbError);
               }
             }
-            
+
             console.log(`[ImageWorker] Completed job: ${job.id} (generate-sticker)`);
-            
+
             // 🧹 CLEAR ALL "STILL WORKING" INTERVALS FOR THIS USER
             clearUserIntervals(userId);
           }
         } catch (error) {
           console.error(`[ImageWorker] Error in job ${job.id}:`, error);
-          
+
           // Clear intervals to prevent hanging
           clearUserIntervals(userId);
-          
+
           try {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
             let userMessage = 'Sorry, there was an error processing your request. Please try again.';
-            
+
             // Provide specific error messages for common issues
             if (errorMessage.includes('timeout')) {
               userMessage = '⏰ Request timed out. This can happen with slow networks. Please try again.';
@@ -1260,7 +1278,7 @@ const startBot = async () => {
             } else if (errorMessage.includes('ENOMEM') || errorMessage.includes('memory')) {
               userMessage = '🧠 Server is under heavy load. Please try again in a few minutes.';
             }
-            
+
             await bot.telegram.sendMessage(chatId, userMessage);
           } catch (notificationError) {
             console.error('[ImageWorker] Error sending error notification:', notificationError);
@@ -1282,9 +1300,9 @@ const startBot = async () => {
     const shortDescription = process.env.TESTING === 'true'
       ? '🧪 BETA - Instalogo Bot — FREE AI Logo Generator'
       : 'BrandForge Bot — AI Crypto Logo';
-      
+
     await bot.telegram.setMyShortDescription(shortDescription);
-    
+
     // Check if we're in production with webhook URL
     const isProduction = process.env.NODE_ENV === 'production';
     const webhookUrl = process.env.WEBHOOK_URL;
@@ -1292,11 +1310,11 @@ const startBot = async () => {
 
     if (isProduction && webhookUrl) {
       console.log('🌐 Starting in WEBHOOK mode (production)');
-      
+
       // Create Express app for webhook
       const app = express();
       app.use(express.json());
-      
+
       // Health check endpoint
       app.get('/health', async (req, res) => {
         try {
@@ -1321,7 +1339,7 @@ const startBot = async () => {
           });
         }
       });
-      
+
       // Webhook endpoint
       app.post(`/webhook/${process.env.BOT_TOKEN}`, (req, res) => {
         try {
@@ -1331,7 +1349,7 @@ const startBot = async () => {
           res.status(500).json({ error: 'Internal server error' });
         }
       });
-      
+
       // Root endpoint
       app.get('/', (req, res) => {
         res.json({
@@ -1341,13 +1359,13 @@ const startBot = async () => {
           timestamp: new Date().toISOString()
         });
       });
-      
+
       // Set webhook with verification
       try {
         const webhookResult = await bot.telegram.setWebhook(webhookUrl);
         console.log(`✅ Webhook set to: ${webhookUrl}`);
         console.log('Webhook result:', webhookResult);
-        
+
         // Verify webhook was actually set
         setTimeout(async () => {
           try {
@@ -1361,17 +1379,17 @@ const startBot = async () => {
             console.error('Error verifying webhook:', verifyError);
           }
         }, 2000);
-        
+
         // Start Express server
         app.listen(port, () => {
           console.log(`🚀 Webhook server running on port ${port}`);
         });
-        
+
       } catch (error) {
         console.error('❌ Failed to set webhook:', error);
         throw error;
       }
-      
+
     } else {
       console.log('📡 Starting in POLLING mode (development)');
       try {
@@ -1382,7 +1400,7 @@ const startBot = async () => {
         throw err;
       }
     }
-    
+
     // Enable graceful stop
     process.once('SIGINT', () => bot.stop('SIGINT'));
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
@@ -1400,7 +1418,7 @@ bot.action('my_history', async (ctx) => {
     await ctx.reply('User not found.');
     return;
   }
-  
+
   // First offer history options
   await ctx.reply(ctx.i18n.t('history.what_to_view'), {
     reply_markup: {
@@ -1433,11 +1451,11 @@ bot.action(/history_(\w+)/, async (ctx) => {
     await ctx.reply('User not found.');
     return;
   }
-  
+
   // Define query type to allow any properties for MongoDB
   let query: Record<string, any> = { userId: user.userId };
   let title = 'Generation History';
-  
+
   if (historyType === 'logo') {
     query = { userId: user.userId, type: 'logo' };
     title = 'Logo Generation History';
@@ -1452,18 +1470,18 @@ bot.action(/history_(\w+)/, async (ctx) => {
     await ctx.reply('Star Transaction History feature coming soon!');
     return;
   }
-  
+
   const history = await ImageGeneration.find(query).sort({ _id: -1 }).limit(10);
   if (!history.length) {
     await ctx.reply(`No ${historyType === 'all' ? '' : historyType + ' '}generation history found.`);
     return;
   }
-  
+
   let totalCost = 0;
   let msg = `*${title}* (Last 10)\n\n`;
-  
+
   const inlineKeyboard = [];
-  
+
   for (let i = 0; i < history.length; i++) {
     const item = history[i];
     const date = new Date(item._id.getTimestamp()).toLocaleDateString();
@@ -1473,13 +1491,13 @@ bot.action(/history_(\w+)/, async (ctx) => {
       msg += ` (${item.quality})`;
     }
     msg += ` - ${item.cost}⭐ - ${date}`;
-    
+
     // Add a row with View Image button for each item
     if (item.imageUrl) {
       // Check if URL is a localhost URL (which Telegram doesn't allow)
-      const isLocalUrl = item.imageUrl.includes('localhost') || 
+      const isLocalUrl = item.imageUrl.includes('localhost') ||
                          item.imageUrl.includes('127.0.0.1');
-      
+
       if (!isLocalUrl) {
         inlineKeyboard.push([
           { text: `View ${item.type.charAt(0).toUpperCase() + item.type.slice(1)} #${i+1}`, url: item.imageUrl }
@@ -1489,19 +1507,19 @@ bot.action(/history_(\w+)/, async (ctx) => {
         msg += `\n  Image URL: ${item.imageUrl} (local development)`;
       }
     }
-    
+
     msg += '\n\n';
   }
-  
+
   msg += `Total spent: *${totalCost}⭐*`;
-  
+
   // Add navigation buttons at the end
   inlineKeyboard.push(
     [{ text: 'Back to History', callback_data: 'my_history' }],
     [{ text: 'Back to Menu', callback_data: 'back_to_menu' }]
   );
-  
-  await ctx.reply(msg, { 
+
+  await ctx.reply(msg, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: inlineKeyboard
@@ -1518,16 +1536,16 @@ bot.action('back_to_menu', async (ctx) => {
 // Add the buy_stars action handler and detailed history
 bot.action('buy_stars', async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   // First, force exit any active scene to avoid getting stuck
   await forceLeaveCurrentScene(ctx);
-  
+
   const user = ctx.dbUser;
   if (!user) {
     await ctx.reply('User not found.');
     return;
   }
-  
+
   await ctx.reply(ctx.i18n.t('stars.choose_amount'), {
     reply_markup: {
       inline_keyboard: [
@@ -1550,12 +1568,12 @@ bot.action('buy_stars', async (ctx) => {
 // Add handlers for each star purchase option
 bot.action(/buy_stars_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   // Make sure we're not in any scene
   await forceLeaveCurrentScene(ctx);
-  
+
   const starsAmount = parseInt(ctx.match[1]);
-  
+
   // Calculate price based on star amount
   let price;
   switch(starsAmount) {
@@ -1565,7 +1583,7 @@ bot.action(/buy_stars_(\d+)/, async (ctx) => {
     case 2500: price = 6999; break;  // $69.99
     default: price = 499;
   }
-  
+
   // Create an invoice with TON support
   const invoice = {
     title: `${starsAmount} Stars`,
@@ -1576,7 +1594,7 @@ bot.action(/buy_stars_(\d+)/, async (ctx) => {
     prices: [{ label: `${starsAmount} Stars`, amount: price }],
     start_parameter: `buy_stars_${starsAmount}`,
   };
-  
+
   try {
     await ctx.replyWithInvoice(invoice);
   } catch (error) {
@@ -1594,10 +1612,10 @@ bot.on('pre_checkout_query', async (ctx) => {
 bot.on('successful_payment', async (ctx) => {
   const payload = ctx.message.successful_payment.invoice_payload;
   const [type, amount, userId] = payload.split('_');
-  
+
   if (type === 'stars' && amount && userId) {
     const starsAmount = parseInt(amount);
-    
+
     try {
       // Update user's star balance
       const user = await User.findOne({ userId: parseInt(userId) });
@@ -1605,7 +1623,7 @@ bot.on('successful_payment', async (ctx) => {
         user.starBalance += starsAmount;
         await user.save();
         await ctx.reply(ctx.i18n.t('stars.payment_successful', { amount: starsAmount, balance: user.starBalance }));
-        
+
         // Force exit from any active scene to prevent being stuck in the loop
         await forceLeaveCurrentScene(ctx);
         // Add a helpful message about the /cancel command
@@ -1761,13 +1779,13 @@ bot.action('change_language', async (ctx) => {
 // Update the memes_start action handler to only enter the memeWizard
 bot.action('memes_start', async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   // First make sure we leave any active scene and clean up the session
   await forceLeaveCurrentScene(ctx);
-  
+
   // Add a flag to indicate we're coming from the Start Meme Flow button
   (ctx.session as any).__fromMemeStart = true;
-  
+
   // Enter the meme wizard scene
   await ctx.scene.enter('memeWizard');
 });
@@ -1780,7 +1798,7 @@ bot.action('referral_menu', async (ctx) => {
 
   try {
     let stats = await mongodbService.getReferralStats(userId);
-    
+
     // Generate referral code if user doesn't have one
     if (!stats.referralCode) {
       const newCode = await mongodbService.generateReferralCode(userId);
@@ -1791,7 +1809,7 @@ bot.action('referral_menu', async (ctx) => {
 
     if (stats.referralCode) {
       const referralLink = `https://t.me/${ctx.botInfo.username}?start=${stats.referralCode}`;
-      
+
       await ctx.editMessageText(
         `🔗 *Your Referral Program*\n\n` +
         `📋 *Your Referral Link:*\n\`${referralLink}\`\n\n` +
@@ -1802,7 +1820,7 @@ bot.action('referral_menu', async (ctx) => {
         `• You get: 20 ⭐ when they use the bot\n` +
         `• They get: No bonus (fair pricing for all)\n\n` +
         `Share your link and earn stars! 🚀`,
-        { 
+        {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
@@ -1828,27 +1846,27 @@ bot.action('referral_menu', async (ctx) => {
 // Handle feedback: like/dislike
 bot.action(/feedback_(like|dislike)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, action, userId, timestamp, logoIndex] = ctx.match;
   const interactionType = action; // 'like' or 'dislike'
-  
+
   try {
     // Get the session data and prompt used for this generation
     const user = await User.findOne({ userId: parseInt(userId) });
     if (!user) return;
-    
+
     // Find the recent logo generation
     const recentGeneration = await ImageGeneration.findOne({
       userId: parseInt(userId),
       type: 'logo',
       createdAt: { $gte: new Date(parseInt(timestamp) - 300000) } // Within 5 minutes
     }).sort({ createdAt: -1 });
-    
+
     if (recentGeneration) {
       // Log feedback for future analysis
       console.log(`[Feedback] User ${userId} ${interactionType}d logo ${logoIndex}`);
     }
-    
+
     // Update the message to show feedback was recorded
     const emoji = action === 'like' ? '👍' : '👎';
     await ctx.editMessageReplyMarkup({
@@ -1863,7 +1881,7 @@ bot.action(/feedback_(like|dislike)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         ]
       ]
     });
-    
+
   } catch (error) {
     console.error('[Feedback] Error collecting feedback:', error);
   }
@@ -1872,13 +1890,13 @@ bot.action(/feedback_(like|dislike)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
 // Handle logo selection and generate complete professional package
 bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
   const userIdNum = parseInt(userId);
   const logoIndexNum = parseInt(logoIndex);
-  
+
   console.log(`[LogoSelection] User ${userId} selected logo ${logoIndex}`);
-  
+
   try {
     // Find the generation data from session or database
     const user = await User.findOne({ userId: userIdNum });
@@ -1886,19 +1904,19 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
       await ctx.reply('❌ User not found. Please try generating logos again.');
       return;
     }
-    
+
     // Get the generation record
     const generationRecord = await ImageGeneration.findOne({
       userId: userIdNum,
       timestamp: new Date(parseInt(timestamp)),
       type: 'logo'
     });
-    
+
     if (!generationRecord) {
       await ctx.reply('❌ Generation not found. Please try generating logos again.');
       return;
     }
-    
+
     // Show processing message
     await ctx.editMessageReplyMarkup({
       inline_keyboard: [
@@ -1907,7 +1925,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         ]
       ]
     });
-    
+
     await ctx.reply(
       `🎉 *Logo Selected!*\n\n` +
       `🎨 Generating your complete professional logo package...\n\n` +
@@ -1919,7 +1937,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
       `⏳ Please wait while we create your professional package...`,
       { parse_mode: 'Markdown' }
     );
-    
+
     // Generate complete package with timeout and retry logic
     try {
       const timeoutMs = 120000; // 2 minutes timeout
@@ -1934,14 +1952,14 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           setTimeout(() => reject(new Error('Complete package generation timed out')), timeoutMs);
         })
       ]) as any;
-      
+
       console.log(`[LogoSelection] Generated complete package for user ${userId}:`, {
         colorVariants: ['transparent', 'white', 'black'],
         sizes: Object.keys(completePackage.sizes),
         vectorFormats: completePackage.svg ? ['svg', 'pdf', 'eps'] : [],
         zipUrl: completePackage.zipUrl
       });
-      
+
       // Store complete package in session
       if (!ctx.session) ctx.session = {} as any;
       (ctx.session as any).selectedLogo = {
@@ -1950,7 +1968,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         logoIndex: logoIndexNum,
         completePackage
       };
-      
+
       // Show success message with download options
       await ctx.reply(
         `🎉 *Complete Professional Logo Package Ready!*\n\n` +
@@ -1965,7 +1983,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         `• Optimized for different platforms\n` +
         `• Clean, text-free designs\n\n` +
         `Choose your download option:`,
-        { 
+        {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
@@ -1986,10 +2004,10 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           }
         }
       );
-      
+
     } catch (packageError) {
       console.error('[LogoSelection] Error generating complete package:', packageError);
-      
+
       // Determine error type and provide appropriate message
       let errorMessage = "❌ Error generating complete package. Falling back to basic variants...";
       if (packageError instanceof Error) {
@@ -2001,7 +2019,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           errorMessage = "📁 File access error. The logo may have been removed.";
         }
       }
-      
+
       // Set up basic session data for downloads even when complete package fails
       try {
         if (!ctx.session) ctx.session = {} as any;
@@ -2021,12 +2039,12 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
       } catch (sessionError) {
         console.error('[LogoSelection] Error setting up session fallback:', sessionError);
       }
-      
+
       try {
         await ctx.reply(
           `${errorMessage}\n\n` +
           `You can still create basic variants of your selected logo:`,
-          { 
+          {
             reply_markup: {
               inline_keyboard: [
                 [
@@ -2049,7 +2067,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         );
       } catch (replyError) {
         console.error('[LogoSelection] Error sending fallback message:', replyError);
-        
+
         // Try a simple fallback message
         try {
           await ctx.reply('❌ Error occurred. Please use /menu to restart.');
@@ -2058,7 +2076,7 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         }
       }
     }
-    
+
   } catch (error) {
     console.error('[LogoSelection] Error handling logo selection:', error);
     await ctx.reply('❌ Error processing your selection. Please try again.');
@@ -2068,13 +2086,13 @@ bot.action(/select_logo_(\d+)_(\d+)_(\d+)/, async (ctx) => {
 // Handle variant generation
 bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, variantType, userId, timestamp, logoIndex] = ctx.match;
   const userIdNum = parseInt(userId);
   const logoIndexNum = parseInt(logoIndex);
-  
+
   console.log(`[VariantGeneration] User ${userId} requesting ${variantType} variant for logo ${logoIndex}`);
-  
+
   try {
     // Get user from database
     const user = await User.findOne({ userId: userIdNum });
@@ -2082,27 +2100,27 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
       await ctx.reply('❌ User not found. Please try generating logos again.');
       return;
     }
-    
+
     // For standard variant, just use the already generated logo
     if (variantType === 'standard') {
       // Get the stored generation data from database
-      const generationRecord = await ImageGeneration.findOne({ 
+      const generationRecord = await ImageGeneration.findOne({
         userId: userIdNum,
         type: 'logo',
         generationMetadata: { $exists: true }
       }).sort({ timestamp: -1 }); // Get most recent generation
-      
+
       if (!generationRecord || !generationRecord.imageUrls || !generationRecord.imageUrls[logoIndexNum]) {
         await ctx.reply('❌ Logo not found. Please generate new logos first.');
         return;
       }
-      
+
       // Use the already generated logo
       const logoUrl = generationRecord.imageUrls[logoIndexNum];
-      
+
       await ctx.replyWithPhoto(
         logoUrl,
-        { 
+        {
           caption: `🖼️ Standard Logo\n\nThis is your original generated logo - no additional processing needed!`,
           reply_markup: {
             inline_keyboard: [
@@ -2118,29 +2136,29 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
       );
       return;
     }
-    
+
     // For other variants, show processing message
     await ctx.reply(`🎨 Generating ${variantType} variant... This may take a moment.`);
-    
+
     // Get the stored generation data from database
-    const generationRecord = await ImageGeneration.findOne({ 
+    const generationRecord = await ImageGeneration.findOne({
       userId: userIdNum,
       type: 'logo',
       generationMetadata: { $exists: true }
     }).sort({ timestamp: -1 }); // Get most recent generation
-    
+
     if (!generationRecord || !generationRecord.generationMetadata?.allSeeds) {
       await ctx.reply('❌ Generation data not found. Please generate new logos first.');
       return;
     }
-    
+
     // Get the seed for the selected logo
-    const selectedSeed = generationRecord.generationMetadata.allSeeds[logoIndexNum] || 
-                        generationRecord.seed || 
+    const selectedSeed = generationRecord.generationMetadata.allSeeds[logoIndexNum] ||
+                        generationRecord.seed ||
                         Math.floor(Math.random() * 1000000);
-    
+
     console.log(`[VariantGeneration] Using seed ${selectedSeed} for logo ${logoIndexNum}`);
-    
+
     // Generate the variant using LogoVariantService with the correct seed
     const generationData = {
       userId: userIdNum,
@@ -2150,22 +2168,22 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
       brandName: generationRecord.generationMetadata.brandName || 'Your Brand',
       seed: selectedSeed // Use the stored seed
     };
-    
+
     const selectedVariants = [variantType as 'standard' | 'transparent' | 'white' | 'icon'];
     const variants = await logoVariantService.generateVariants(generationData, selectedVariants);
     const variantUrl = variants[variantType];
-    
+
     if (variantUrl) {
       // Fetch the variant image for sending
       try {
         const response = await fetch(variantUrl);
         const arrayBuffer = await response.arrayBuffer();
         const variantBuffer = Buffer.from(arrayBuffer);
-        
+
         // Send preview as photo
         await ctx.replyWithPhoto(
           { source: variantBuffer },
-          { 
+          {
             caption: `📸 Preview: ${variantType.charAt(0).toUpperCase() + variantType.slice(1)} variant generated!`,
             reply_markup: {
               inline_keyboard: [
@@ -2177,14 +2195,14 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
             }
           }
         );
-        
+
         // Send original PNG as document for download
         await ctx.replyWithDocument(
-          { 
-            source: variantBuffer, 
-            filename: `${generationData.brandName?.replace(/\s+/g, '-').toLowerCase() || 'logo'}-${variantType}.png` 
+          {
+            source: variantBuffer,
+            filename: `${generationData.brandName?.replace(/\s+/g, '-').toLowerCase() || 'logo'}-${variantType}.png`
           },
-          { 
+          {
             caption: `📥 Download: ${variantType.charAt(0).toUpperCase() + variantType.slice(1)} Variant (PNG Format)\n\nHigh-quality PNG with ${variantType === 'transparent' ? 'transparent' : variantType === 'white' ? 'white' : 'transparent'} background - perfect for professional use!`,
             reply_markup: {
               inline_keyboard: [
@@ -2196,7 +2214,7 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
             }
           }
         );
-        
+
       } catch (fetchError) {
         console.error('[VariantGeneration] Error fetching variant image:', fetchError);
         await ctx.reply('❌ Error processing variant image. Please try again.');
@@ -2204,7 +2222,7 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
     } else {
       await ctx.reply('❌ Failed to generate variant. Please try again.');
     }
-    
+
   } catch (error) {
     console.error('[VariantGeneration] Error generating variant:', error);
     await ctx.reply('❌ Error generating variant. Please try again later.');
@@ -2214,13 +2232,13 @@ bot.action(/generate_variant_(standard|transparent|white|icon)_(\d+)_(\d+)_(\d+)
 // Handle generate all variants
 bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
   const userIdNum = parseInt(userId);
   const logoIndexNum = parseInt(logoIndex);
-  
+
   console.log(`[VariantGeneration] User ${userId} generating all variants for logo ${logoIndex}`);
-  
+
   try {
     // Get user from database
     const user = await User.findOne({ userId: userIdNum });
@@ -2228,13 +2246,13 @@ bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
       await ctx.reply('❌ User not found. Please try generating logos again.');
       return;
     }
-    
+
     // Show processing message
     await ctx.reply(`🎨 Generating all variants... This may take a few moments.`);
-    
+
     const variants = ['standard', 'transparent', 'white', 'icon'];
     const results = [];
-    
+
     for (const variantType of variants) {
       try {
         const generationData = {
@@ -2244,11 +2262,11 @@ bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           selectedImageIndex: logoIndexNum,
           brandName: 'Your Brand'
         };
-        
+
         const selectedVariants = [variantType as 'standard' | 'transparent' | 'white' | 'icon'];
         const variants = await logoVariantService.generateVariants(generationData, selectedVariants);
         const variantUrl = variants[variantType];
-        
+
         if (variantUrl) {
           results.push({ type: variantType, url: variantUrl });
         }
@@ -2256,13 +2274,13 @@ bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         console.error(`[VariantGeneration] Error generating ${variantType}:`, error);
       }
     }
-    
+
     if (results.length > 0) {
       let message = `🎉 Generated ${results.length} variants:\n\n`;
       for (const result of results) {
         message += `• ${result.type.charAt(0).toUpperCase() + result.type.slice(1)}: ✅\n`;
       }
-      
+
       await ctx.reply(message, {
         reply_markup: {
           inline_keyboard: [
@@ -2273,33 +2291,33 @@ bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
           ]
         }
       });
-      
+
       // Send each variant as both photo preview and document download
       for (const result of results) {
         try {
           const response = await fetch(result.url);
           const arrayBuffer = await response.arrayBuffer();
           const variantBuffer = Buffer.from(arrayBuffer);
-          
+
           // Send preview as photo
           await ctx.replyWithPhoto(
             { source: variantBuffer },
-            { 
+            {
               caption: `📸 Preview: ${result.type.charAt(0).toUpperCase() + result.type.slice(1)} Variant`
             }
           );
-          
+
           // Send original PNG as document for download
           await ctx.replyWithDocument(
-            { 
-              source: variantBuffer, 
-              filename: `logo-${result.type}.png` 
+            {
+              source: variantBuffer,
+              filename: `logo-${result.type}.png`
             },
-            { 
+            {
               caption: `📥 Download: ${result.type.charAt(0).toUpperCase() + result.type.slice(1)} Variant (PNG Format)\n\nHigh-quality PNG - perfect for professional use!`
             }
           );
-          
+
         } catch (fetchError) {
           console.error(`[VariantGeneration] Error fetching ${result.type} variant:`, fetchError);
         }
@@ -2307,7 +2325,7 @@ bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
     } else {
       await ctx.reply('❌ Failed to generate any variants. Please try again.');
     }
-    
+
   } catch (error) {
     console.error('[VariantGeneration] Error generating all variants:', error);
     await ctx.reply('❌ Error generating variants. Please try again later.');
@@ -2317,12 +2335,12 @@ bot.action(/generate_all_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
 // Handle back to variants menu
 bot.action(/back_to_variants_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
-  
+
   await ctx.reply(
     `Choose which variants to generate:`,
-    { 
+    {
       reply_markup: {
         inline_keyboard: [
           [
@@ -2349,16 +2367,16 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   } catch (err) {
     console.error('[Download] Error answering callback query:', err);
   }
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
   const userIdNum = parseInt(userId);
-  
+
   console.log(`[Download] Complete package download requested: userId=${userId}, timestamp=${timestamp}, logoIndex=${logoIndex}`);
-  
+
   try {
     // Check if we're in testing mode
     const isTestingMode = process.env.NODE_ENV !== 'production' || process.env.BETA_TESTING === 'true';
-    
+
     if (!isTestingMode) {
       // Production mode - check user balance for 50 credits
       const user = await User.findOne({ userId: userIdNum });
@@ -2366,7 +2384,7 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         await ctx.reply('❌ User not found. Please try again.');
         return;
       }
-      
+
       const requiredCredits = 50;
       if (user.starBalance < requiredCredits) {
         await ctx.reply(
@@ -2385,75 +2403,75 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         );
         return;
       }
-      
+
       // Deduct credits
       user.starBalance -= requiredCredits;
       await user.save();
-      
+
       console.log(`[Download] Deducted ${requiredCredits} credits from user ${userIdNum}. New balance: ${user.starBalance}`);
     } else {
       console.log(`[Download] Testing mode - skipping payment for user ${userIdNum}`);
     }
-    
+
     const selectedLogo = (ctx.session as any)?.selectedLogo;
-    
+
     console.log(`[Download] Session check: selectedLogo exists=${!!selectedLogo}, completePackage exists=${!!selectedLogo?.completePackage}`);
-    
+
     if (!selectedLogo || !selectedLogo.completePackage) {
       console.error('[Download] No selectedLogo or completePackage in session');
       await ctx.reply('❌ Complete package not found. Please select a logo again.');
       return;
     }
-    
+
     const zipUrl = selectedLogo.completePackage.zipUrl;
     console.log(`[Download] ZIP URL: ${zipUrl}`);
-    
+
     if (!zipUrl) {
       console.error('[Download] ZIP URL is null or undefined');
       await ctx.reply('❌ ZIP package not available. Please try again.');
       return;
     }
-    
+
     // Handle file:// URLs by reading directly from filesystem
     let zipBuffer: Buffer;
     if (zipUrl.startsWith('file://')) {
       const filePath = zipUrl.replace('file://', '');
       console.log(`[Download] Reading ZIP from file system: ${filePath}`);
-      
+
       if (!await fs.promises.access(filePath).then(() => true).catch(() => false)) {
         console.error(`[Download] File not found: ${filePath}`);
         await ctx.reply('❌ ZIP file not found. It may have been deleted. Please generate a new logo.');
         return;
       }
-      
+
       zipBuffer = await fs.promises.readFile(filePath);
       console.log(`[Download] Read ${zipBuffer.length} bytes from file system`);
     } else {
       // Handle HTTP URLs with fetch
       console.log(`[Download] Fetching ZIP from URL: ${zipUrl}`);
       const response = await fetch(zipUrl);
-      
+
       if (!response.ok) {
         console.error(`[Download] Fetch failed: ${response.status} ${response.statusText}`);
         await ctx.reply(`❌ Failed to download package: ${response.statusText}`);
         return;
       }
-      
+
       zipBuffer = Buffer.from(await response.arrayBuffer());
       console.log(`[Download] Downloaded ${zipBuffer.length} bytes from URL`);
     }
-    
+
     console.log(`[Download] Sending ZIP document to user...`);
-    
+
     // Check testing mode for display
     const isTestingModeDisplay = process.env.NODE_ENV !== 'production' || process.env.BETA_TESTING === 'true';
-    
+
     await ctx.replyWithDocument(
-      { 
-        source: zipBuffer, 
-        filename: `Complete_Logo_Package_${selectedLogo.completePackage.brandName || 'logo'}.zip` 
+      {
+        source: zipBuffer,
+        filename: `Complete_Logo_Package_${selectedLogo.completePackage.brandName || 'logo'}.zip`
       },
-      { 
+      {
         caption: `📦 *Complete Professional Logo Package*\n\n` +
         `Your complete logo package includes:\n` +
         `• Color variants (transparent, white, black)\n` +
@@ -2472,9 +2490,9 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         }
       }
     );
-    
+
     console.log(`[Download] ZIP document sent successfully`);
-    
+
   } catch (error) {
     console.error('[Download] Error downloading complete package:', error);
     await ctx.reply(`❌ Error downloading complete package: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`);
@@ -2484,35 +2502,35 @@ bot.action(/download_complete_package_(\d+)_(\d+)_(\d+)/, async (ctx) => {
 // Handle specialized icons download
 bot.action(/download_icons_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
-  
+
   try {
     const selectedLogo = (ctx.session as any)?.selectedLogo;
     if (!selectedLogo || !selectedLogo.completePackage) {
       await ctx.reply('❌ Specialized icons not found. Please select a logo again.');
       return;
     }
-    
+
     // Get the complete package ZIP URL and download it
     const logoPackage = selectedLogo.completePackage;
     if (logoPackage.zipUrl) {
       const response = await fetch(logoPackage.zipUrl);
       const buffer = Buffer.from(await response.arrayBuffer());
-      
+
       await ctx.replyWithDocument(
-        { 
-          source: buffer, 
-          filename: `specialized_icons_${logoPackage.brandName || 'logo'}.zip` 
+        {
+          source: buffer,
+          filename: `specialized_icons_${logoPackage.brandName || 'logo'}.zip`
         },
-        { 
+        {
           caption: `🎯 Specialized Icons Package\n\nAI-generated icon-only versions optimized for different platforms:\n• Favicon (64x64)\n• App Icon (512x512)\n• Social Media (400x400)\n• Print (1000x1000)`
         }
       );
     } else {
       await ctx.reply('❌ Specialized icons package not available. Please try again.');
     }
-    
+
   } catch (error) {
     console.error('[Download] Error downloading specialized icons:', error);
     await ctx.reply('❌ Error downloading specialized icons. Please try again.');
@@ -2522,40 +2540,40 @@ bot.action(/download_icons_(\d+)_(\d+)_(\d+)/, async (ctx) => {
 // Handle size variants download
 bot.action(/download_sizes_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
-  
+
   try {
     const selectedLogo = (ctx.session as any)?.selectedLogo;
     if (!selectedLogo || !selectedLogo.completePackage) {
       await ctx.reply('❌ Size variants not found. Please select a logo again.');
       return;
     }
-    
+
     const logoPackage = selectedLogo.completePackage;
     const sizeCategories = Object.entries(logoPackage.sizes);
-    
+
     for (const [category, urls] of sizeCategories) {
       if (Array.isArray(urls) && urls.length > 0) {
         await ctx.reply(`📏 *${category.charAt(0).toUpperCase() + category.slice(1)} Sizes:*`);
-        
+
         for (let i = 0; i < urls.length; i++) {
           try {
             const response = await fetch(urls[i]);
             const buffer = Buffer.from(await response.arrayBuffer());
-            
+
             // Extract size from filename or use category info
             const size = category === 'favicon' ? [16, 32, 48, 64][i] :
                         category === 'web' ? [192, 512][i] :
                         category === 'social' ? [400, 800, 1080][i] :
                         category === 'print' ? [1000, 2000, 3000][i] : 'unknown';
-            
+
             await ctx.replyWithDocument(
-              { 
-                source: buffer, 
-                filename: `logo_${size}x${size}.png` 
+              {
+                source: buffer,
+                filename: `logo_${size}x${size}.png`
               },
-              { 
+              {
                 caption: `📏 ${size}x${size}px - ${category.charAt(0).toUpperCase() + category.slice(1)} Size`
               }
             );
@@ -2565,7 +2583,7 @@ bot.action(/download_sizes_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         }
       }
     }
-    
+
   } catch (error) {
     console.error('[Download] Error downloading size variants:', error);
     await ctx.reply('❌ Error downloading size variants. Please try again.');
@@ -2575,41 +2593,41 @@ bot.action(/download_sizes_(\d+)_(\d+)_(\d+)/, async (ctx) => {
 // Handle vector formats download
 bot.action(/download_vectors_(\d+)_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, userId, timestamp, logoIndex] = ctx.match;
-  
+
   try {
     const selectedLogo = (ctx.session as any)?.selectedLogo;
     if (!selectedLogo || !selectedLogo.completePackage) {
       await ctx.reply('❌ Vector formats not found. Please select a logo again.');
       return;
     }
-    
+
     const logoPackage = selectedLogo.completePackage;
     const vectorFormats = [
       { name: 'SVG', url: logoPackage.svg, filename: 'logo.svg' },
       { name: 'PDF', url: logoPackage.pdf, filename: 'logo.pdf' },
       { name: 'EPS', url: logoPackage.eps, filename: 'logo.eps' }
     ];
-    
+
     let hasAnyFormat = false;
-    
+
     for (const format of vectorFormats) {
       if (format.url) {
         hasAnyFormat = true;
         try {
           const response = await fetch(format.url);
           const buffer = Buffer.from(await response.arrayBuffer());
-          
+
           await ctx.replyWithDocument(
-            { 
-              source: buffer, 
-              filename: format.filename 
+            {
+              source: buffer,
+              filename: format.filename
             },
-            { 
+            {
               caption: `📐 ${format.name} Vector Format\n\n` +
-              `Perfect for ${format.name === 'SVG' ? 'web and scalable graphics' : 
-                          format.name === 'PDF' ? 'print and documents' : 
+              `Perfect for ${format.name === 'SVG' ? 'web and scalable graphics' :
+                          format.name === 'PDF' ? 'print and documents' :
                           'professional printing and design'}!`
             }
           );
@@ -2618,11 +2636,11 @@ bot.action(/download_vectors_(\d+)_(\d+)_(\d+)/, async (ctx) => {
         }
       }
     }
-    
+
     if (!hasAnyFormat) {
       await ctx.reply('❌ Vector formats not available. Using high-quality PNGs instead.');
     }
-    
+
   } catch (error) {
     console.error('[Download] Error downloading vector formats:', error);
     await ctx.reply('❌ Error downloading vector formats. Please try again.');
@@ -2638,17 +2656,17 @@ bot.action('back_to_menu', async (ctx) => {
 // Handle regenerate feedback
 bot.action(/regenerate_logo_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery('Regenerating logo...');
-  
+
   const logoIndex = parseInt(ctx.match[1]);
   const userId = ctx.from?.id;
-  
+
   try {
     // Log regenerate feedback (indicates dissatisfaction)
     console.log(`[Feedback] User ${userId} requested regeneration of logo ${logoIndex}`);
-    
+
     // Here you would implement the actual regeneration logic
     await ctx.reply('🔄 Regeneration feature coming soon.');
-    
+
   } catch (error) {
     console.error('[Feedback] Error processing regeneration:', error);
     await ctx.reply('❌ Error processing regeneration. Please try again.');
@@ -2658,10 +2676,10 @@ bot.action(/regenerate_logo_(\d+)/, async (ctx) => {
 // Handle feedback: like/dislike for memes
 bot.action(/feedback_(like|dislike)_meme_(\d+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const [, action, userId, timestamp] = ctx.match;
   const interactionType = action; // 'like' or 'dislike'
-  
+
   try {
     // Find the recent meme generation
     const recentGeneration = await ImageGeneration.findOne({
@@ -2669,12 +2687,12 @@ bot.action(/feedback_(like|dislike)_meme_(\d+)_(\d+)/, async (ctx) => {
       type: 'meme',
       createdAt: { $gte: new Date(parseInt(timestamp) - 300000) } // Within 5 minutes
     }).sort({ createdAt: -1 });
-    
+
     if (recentGeneration) {
       // Log feedback for future analysis
       console.log(`[Feedback] User ${userId} ${interactionType}d meme`);
     }
-    
+
     // Update the message to show feedback was recorded
     const emoji = action === 'like' ? '👍' : '👎';
     await ctx.editMessageReplyMarkup({
@@ -2689,7 +2707,7 @@ bot.action(/feedback_(like|dislike)_meme_(\d+)_(\d+)/, async (ctx) => {
         ]
       ]
     });
-    
+
   } catch (error) {
     console.error('[Feedback] Error collecting meme feedback:', error);
   }
@@ -2698,36 +2716,36 @@ bot.action(/feedback_(like|dislike)_meme_(\d+)_(\d+)/, async (ctx) => {
 // Handle meme regeneration with feedback-driven improvement
 bot.action(/regenerate_meme(_(\d+))?/, async (ctx) => {
   await ctx.answerCbQuery('🔄 Regenerating meme with improvements...');
-  
+
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   try {
     // Log regenerate feedback (indicates dissatisfaction)
     console.log(`[Feedback] User ${userId} requested meme regeneration`);
-    
+
     // Get the user's last meme parameters
     const lastParams = await mongodbService.getLastMemeParams(userId);
     if (!lastParams) {
       await ctx.reply('❌ No previous meme data found. Please create a new meme.');
       return;
     }
-    
+
     // Check user balance
     const user = await User.findOne({ userId });
     if (!user) {
       await ctx.reply('❌ User not found.');
       return;
     }
-    
+
     const cost = 50; // Regeneration cost
     if (user.starBalance < cost) {
       await ctx.reply(`❌ Insufficient stars. Need ${cost} ⭐ stars for regeneration.`);
       return;
     }
-    
+
     await ctx.reply('🧠 Analyzing previous feedback and regenerating improved meme...');
-    
+
     // Queue regenerated meme with feedback integration
     await imageQueue.add('generate-meme', {
       prompt: 'DSPy will generate improved prompt based on feedback',
@@ -2743,9 +2761,9 @@ bot.action(/regenerate_meme(_(\d+))?/, async (ctx) => {
       useDSPy: true,
       isRegeneration: true // Flag to indicate this is a feedback-driven regeneration
     }, { timeout: 300000 });
-    
+
     console.log(`[Feedback] User ${userId} requested meme regeneration`);
-    
+
   } catch (error) {
     console.error('[Feedback] Error processing meme regeneration:', error);
     await ctx.reply('❌ Error processing regeneration. Please try again.');
@@ -2755,40 +2773,40 @@ bot.action(/regenerate_meme(_(\d+))?/, async (ctx) => {
 // Handle meme sharing with referral link
 bot.action(/share_meme_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
-  
+
   const memeId = ctx.match[1];
   const userId = ctx.from?.id;
-  
+
   if (!userId) return;
-  
+
   try {
     // Get user's referral stats and generate code if needed
     let stats = await mongodbService.getReferralStats(userId);
-    
+
     if (!stats.referralCode) {
       const newCode = await mongodbService.generateReferralCode(userId);
       if (newCode) {
         stats.referralCode = newCode;
       }
     }
-    
+
     if (stats.referralCode) {
       const referralLink = `https://t.me/${ctx.botInfo.username}?start=${stats.referralCode}`;
       const shareText = `🎨 Check out this amazing meme I created with BrandForge Bot! Create your own AI-powered memes, logos, and stickers. Join me: ${referralLink}`;
-      
+
       await ctx.reply(
         `📤 *Share Your Meme & Earn Stars!*\n\n` +
         `Copy this message to share your meme and referral link:\n\n` +
         `\`${shareText}\`\n\n` +
         `💰 *You earn 20 ⭐ stars* when someone joins and uses the bot!\n\n` +
         `🔗 Your referral stats: ${stats.referralCount} referrals, ${stats.totalRewards} ⭐ earned`,
-        { 
+        {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ 
-                text: '📱 Share via Telegram', 
-                url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(shareText)}` 
+              [{
+                text: '📱 Share via Telegram',
+                url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(shareText)}`
               }],
               [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
             ]
@@ -2798,7 +2816,7 @@ bot.action(/share_meme_(.+)/, async (ctx) => {
     } else {
       await ctx.reply('❌ Error generating referral link. Please try again later.');
     }
-    
+
   } catch (error) {
     console.error('[Share] Error sharing meme:', error);
     await ctx.reply('❌ Error sharing meme. Please try again.');
@@ -2810,7 +2828,7 @@ bot.command('testingstatus', async (ctx) => {
   const isTestMode = process.env.TESTING === 'true';
   const statusEmoji = isTestMode ? '✅' : '❌';
   const statusText = isTestMode ? 'ENABLED' : 'DISABLED';
-  
+
   const message = `🧪 **Testing Mode Status**\n\n` +
     `${statusEmoji} Testing Mode: **${statusText}**\n\n` +
     `📝 **What this means:**\n` +
@@ -2818,7 +2836,7 @@ bot.command('testingstatus', async (ctx) => {
     `• Balance deduction: ${isTestMode ? 'SKIPPED' : 'ACTIVE'}\n` +
     `• Free generations: ${isTestMode ? 'UNLIMITED' : 'LIMITED'}\n\n` +
     `${isTestMode ? '🎉 Perfect for beta testing!' : '💰 Production mode active'}`;
-  
+
   await ctx.reply(message, { parse_mode: 'Markdown' });
 });
 
@@ -2835,5 +2853,56 @@ bot.command('toggletesting', async (ctx) => {
   );
 });
 
-connectDB();
-startBot(); 
+// Main application startup function
+async function startApplication(): Promise<void> {
+  try {
+    logger.info('🚀 Starting Instalogo Bot');
+    logger.info('===============================');
+    logger.info(`Environment: ${config.server.environment}`);
+    logger.info(`Bot Username: ${config.telegram.botUsername || 'Not configured'}`);
+
+    // Check MongoDB environment variable
+    const mongoUrl = config.database.mongoUri;
+    if (mongoUrl) {
+      logger.info(`🔍 MongoDB URL found: ${mongoUrl.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}`);
+    } else {
+      logger.warn('⚠️  No MongoDB connection URL found in environment variables');
+      logger.warn('   Expected: MONGO_URI or MONGODB_URI');
+    }
+    logger.info('===============================');
+
+    // Connect to database
+    logger.info('🔌 Connecting to MongoDB...');
+    await connectDB();
+
+    // Verify database health
+    logger.info('🏥 Checking database health...');
+    const dbHealth = await checkDBHealth();
+
+    if (dbHealth.healthy) {
+      logger.info('✅ Database is healthy and ready');
+      logger.info(`📊 Database Details: ${JSON.stringify(dbHealth.details, null, 2)}`);
+    } else {
+      logger.error('❌ Database health check failed:', dbHealth.status);
+      logger.error('📊 Database Details:', dbHealth.details);
+      process.exit(1);
+    }
+
+    // Start the bot
+    logger.info('🤖 Starting Telegram bot...');
+    await startBot();
+
+    // Setup graceful shutdown
+    setupGracefulShutdown(bot);
+
+    logger.info('🎯 Application startup completed successfully!');
+    logger.info('📝 Bot is ready to receive messages');
+
+  } catch (error) {
+    logger.error('❌ Application startup failed:', error);
+    process.exit(1);
+  }
+}
+
+// Start the application
+startApplication();

@@ -1,8 +1,6 @@
-import mongoose from 'mongoose';
+// This file is deprecated - use src/utils/dbConnect.ts instead
+// Keeping for backward compatibility
+import { connectDB as connectDBUtil, disconnectDB, getDBStatus, checkDBHealth } from '../utils/dbConnect';
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/telegram-bot';
-
-export const connectDB = async () => {
-  await mongoose.connect(MONGO_URI);
-  console.log('MongoDB connected');
-}; 
+export const connectDB = connectDBUtil;
+export { disconnectDB, getDBStatus, checkDBHealth }; 
