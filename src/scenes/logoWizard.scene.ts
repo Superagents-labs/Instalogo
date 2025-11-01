@@ -8,6 +8,7 @@ import { imageQueue } from '../utils/imageQueue';
 import { ImageGeneration } from '../models/ImageGeneration';
 import crypto from 'crypto';
 import { addUserInterval } from '../utils/intervalManager';
+import { telegramStarsService } from '../index';
 
 // Define available options for button selections
 const styleOptions = ['Minimalist', 'Elegant', 'Bold', 'Playful', 'Vintage/Retro', 'Modern', 'Corporate/Professional', 'Artistic/Hand-drawn', 'Other (custom)'];
@@ -423,10 +424,29 @@ export function createLogoWizardScene(
       return;
     }
     const cost = !user.freeGenerationUsed ? 0 : 50; // 50 stars per logo
+    
     // Skip credit check in testing mode
-    if (process.env.TESTING !== 'true' && cost > 0 && user.starBalance < cost) {
-      await ctx.reply(ctx.i18n.t('errors.insufficient_stars'));
-      return;
+    if (process.env.TESTING !== 'true' && cost > 0) {
+      // Auto-sync balance before checking
+      const currentBalance = await telegramStarsService.getUserStarsBalance(ctx.from!.id);
+      
+      if (currentBalance < cost) {
+        await ctx.reply(
+          ctx.i18n.t('errors.insufficient_stars') + `\n\n` +
+          `Your balance: ${currentBalance} ⭐\n` +
+          `Required: ${cost} ⭐\n\n` +
+          `💡 Tip: After purchasing stars from @premiumbot, your balance will auto-sync!`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '💳 Buy Stars', callback_data: 'buy_stars' }],
+                [{ text: '🔄 Refresh Balance', callback_data: 'refresh_stars_balance' }]
+              ]
+            }
+          }
+        );
+        return;
+      }
     }
     await ctx.reply(ctx.i18n.t('logo.generating'));
     await ctx.scene.leave();
