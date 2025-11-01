@@ -7,6 +7,7 @@ import express from 'express';
 import logger from './utils/logger';
 import { config } from './config/config';
 import { setupGracefulShutdown } from './utils/gracefulShutdown';
+import { startServer, stopServer } from './api/server';
 
 // Load environment variables first
 dotenv.config();
@@ -2887,6 +2888,10 @@ async function startApplication(): Promise<void> {
       logger.error('📊 Database Details:', dbHealth.details);
       process.exit(1);
     }
+
+    // Start HTTP server (for health checks and webhooks if needed)
+    logger.info('🌐 Starting HTTP server...');
+    startServer();
 
     // Start the bot
     logger.info('🤖 Starting Telegram bot...');

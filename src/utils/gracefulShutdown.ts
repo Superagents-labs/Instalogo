@@ -1,5 +1,6 @@
 import logger from './logger';
 import { disconnectDB } from './dbConnect';
+import { stopServer } from '../api/server';
 
 // Track shutdown state
 let shuttingDown = false;
@@ -18,6 +19,15 @@ export async function gracefulShutdown(signal: string, bot?: any): Promise<void>
   logger.info(`🛑 ${signal} received, shutting down gracefully...`);
 
   try {
+    // Stop HTTP server
+    logger.info('🌐 Stopping HTTP server...');
+    try {
+      await stopServer();
+      logger.info('✅ HTTP server stopped');
+    } catch (error) {
+      logger.error('❌ Error stopping HTTP server:', error);
+    }
+
     // Stop the bot gracefully
     if (bot && typeof bot.stop === 'function') {
       logger.info('🤖 Stopping Telegram bot...');
